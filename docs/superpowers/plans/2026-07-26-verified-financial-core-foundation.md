@@ -1451,7 +1451,7 @@ git commit -m "feat(schema): define observations facts and fact sets"
 - Create: `packages/core/src/independence.test.ts`
 - Modify: `packages/core/src/index.ts`
 
-- [ ] **Step 1: Add complete typed test factories**
+- [x] **Step 1: Add complete typed test factories**
 
 Create `packages/core/src/test-fixtures.ts`:
 
@@ -1629,7 +1629,7 @@ export function makeUnmapped(
 }
 ```
 
-- [ ] **Step 2: Write failing compatibility tests**
+- [x] **Step 2: Write failing compatibility tests**
 
 Create `packages/core/src/compatibility.test.ts`:
 
@@ -1679,7 +1679,7 @@ it("accepts compatible observations from different upstreams", () => {
 });
 ```
 
-- [ ] **Step 3: Run compatibility tests and verify RED**
+- [x] **Step 3: Run compatibility tests and verify RED**
 
 Run:
 
@@ -1689,7 +1689,7 @@ pnpm --filter @verified-financial/core test -- src/compatibility.test.ts
 
 Expected: FAIL because `compareCompatibility` does not exist.
 
-- [ ] **Step 4: Implement explicit compatibility dimensions**
+- [x] **Step 4: Implement explicit compatibility dimensions**
 
 Create `packages/core/src/compatibility.ts`:
 
@@ -1727,7 +1727,7 @@ export function compareCompatibility(
 }
 ```
 
-- [ ] **Step 5: Write failing source-independence tests**
+- [x] **Step 5: Write failing source-independence tests**
 
 Create `packages/core/src/independence.test.ts`:
 
@@ -1748,7 +1748,7 @@ describe("upstream independence", () => {
 });
 ```
 
-- [ ] **Step 6: Implement upstream grouping**
+- [x] **Step 6: Implement upstream grouping**
 
 Create `packages/core/src/independence.ts`:
 
@@ -1764,7 +1764,7 @@ export function independentUpstreamSourceIds(
 }
 ```
 
-- [ ] **Step 7: Export and verify compatibility**
+- [x] **Step 7: Export and verify compatibility**
 
 Add to `packages/core/src/index.ts`:
 
@@ -1782,7 +1782,7 @@ pnpm --filter @verified-financial/core typecheck
 
 Expected: all compatibility and independence tests PASS.
 
-- [ ] **Step 8: Commit compatibility rules**
+- [x] **Step 8: Commit compatibility rules**
 
 ```bash
 git add packages/core/src
