@@ -993,7 +993,7 @@ git commit -m "feat(schema): define periods accounting and provenance"
 - Create: `packages/schema/src/facts.test.ts`
 - Modify: `packages/schema/src/index.ts`
 
-- [ ] **Step 1: Write failing FactSet contract tests**
+- [x] **Step 1: Write failing FactSet contract tests**
 
 Create `packages/schema/src/facts.test.ts`:
 
@@ -1164,7 +1164,7 @@ describe("financial fact contracts", () => {
 });
 ```
 
-- [ ] **Step 2: Run the fact contract test and verify RED**
+- [x] **Step 2: Run the fact contract test and verify RED**
 
 Run:
 
@@ -1174,7 +1174,7 @@ pnpm --filter @verified-financial/schema test -- src/facts.test.ts
 
 Expected: FAIL because `./facts.js` does not exist.
 
-- [ ] **Step 3: Implement fact contracts**
+- [x] **Step 3: Implement fact contracts**
 
 Create `packages/schema/src/facts.ts` with these exported schemas and inferred types:
 
@@ -1417,7 +1417,7 @@ export const VerifiedFactSetSchema = z.object({
 export type VerifiedFactSet = z.infer<typeof VerifiedFactSetSchema>;
 ```
 
-- [ ] **Step 4: Export and verify fact contracts**
+- [x] **Step 4: Export and verify fact contracts**
 
 Add to `packages/schema/src/index.ts`:
 
@@ -1434,7 +1434,7 @@ pnpm --filter @verified-financial/schema typecheck
 
 Expected: all schema tests PASS.
 
-- [ ] **Step 5: Commit fact contracts**
+- [x] **Step 5: Commit fact contracts**
 
 ```bash
 git add packages/schema/src
