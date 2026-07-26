@@ -730,7 +730,7 @@ pnpm --filter @verified-financial/schema typecheck
 
 Expected: all schema tests PASS.
 
-- [ ] **Step 5: Commit identity contracts**
+- [x] **Step 5: Commit identity contracts**
 
 ```bash
 git add packages/schema/src
