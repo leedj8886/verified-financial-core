@@ -45,3 +45,25 @@ it("accepts compatible observations from different upstreams", () => {
     reasonCodes: [],
   });
 });
+
+it("reports every incompatible accounting and period dimension", () => {
+  const left = makeObservation();
+  const right = makeObservation({
+    companyId: "company:other",
+    concept: "income.netProfit",
+    period: { endDate: "2024-12-31", fiscalYear: 2024 },
+    basis: {
+      standard: "IFRS",
+      scope: "standalone",
+      attribution: "all-shareholders",
+    },
+  });
+  expect(compareCompatibility(left, right).reasonCodes).toEqual([
+    "CONCEPT_MISMATCH",
+    "COMPANY_MISMATCH",
+    "PERIOD_MISMATCH",
+    "ACCOUNTING_STANDARD_MISMATCH",
+    "ACCOUNTING_SCOPE_MISMATCH",
+    "ATTRIBUTION_MISMATCH",
+  ]);
+});

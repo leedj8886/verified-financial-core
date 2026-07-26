@@ -2982,10 +2982,11 @@ git commit -m "feat(core): assemble reproducible verified fact sets"
 - Create: `tests/golden/foundation/future-publication.json`
 - Create: `packages/core/src/golden.test.ts`
 - Modify: `package.json`
+- Modify: `vitest.config.ts`
 - Modify: `packages/schema/package.json`
 - Modify: `packages/core/package.json`
 
-- [ ] **Step 1: Add provider-neutral Golden fixtures**
+- [x] **Step 1: Add provider-neutral Golden fixtures**
 
 Create `tests/golden/foundation/verified-revenue.json`:
 
@@ -3246,7 +3247,7 @@ Create `tests/golden/foundation/future-publication.json`:
 These fixtures use only a fictional company and `example.invalid` source URLs;
 never put tokens, cookies, or live payloads in the foundation corpus.
 
-- [ ] **Step 2: Write Golden behavior tests**
+- [x] **Step 2: Write Golden behavior tests**
 
 Create `packages/core/src/golden.test.ts`:
 
@@ -3296,7 +3297,7 @@ describe("foundation Golden Corpus", () => {
 });
 ```
 
-- [ ] **Step 3: Run Golden tests**
+- [x] **Step 3: Run Golden tests**
 
 Run:
 
@@ -3306,7 +3307,7 @@ pnpm --filter @verified-financial/core test -- src/golden.test.ts
 
 Expected: four Golden cases PASS.
 
-- [ ] **Step 4: Add coverage thresholds**
+- [x] **Step 4: Add coverage thresholds**
 
 Replace the root `package.json` with:
 
@@ -3388,7 +3389,11 @@ export default defineConfig({
 });
 ```
 
-- [ ] **Step 5: Run the full foundation quality gate**
+Extend the root `vitest.config.ts` coverage configuration to include both
+packages, exclude tests and re-export-only files, and enforce the same
+thresholds across the combined foundation codebase.
+
+- [x] **Step 5: Run the full foundation quality gate**
 
 Run:
 
@@ -3409,7 +3414,7 @@ Expected:
 - both packages build ESM and declarations;
 - `git diff --check` prints no errors.
 
-- [ ] **Step 6: Verify runtime package exports**
+- [x] **Step 6: Verify runtime package exports**
 
 Run:
 
@@ -3424,7 +3429,7 @@ if (!stableId("test", {a: 1}).startsWith("test:")) process.exit(1);
 
 Expected: exit code 0 with no output.
 
-- [ ] **Step 7: Commit the Golden Corpus and quality gate**
+- [x] **Step 7: Commit the Golden Corpus and quality gate**
 
 ```bash
 git add package.json pnpm-lock.yaml packages tests

@@ -6,6 +6,10 @@ import {
 import { makeObservation } from "./test-fixtures.js";
 
 describe("cross-source verification", () => {
+  it("rejects an empty observation group", () => {
+    expect(() => verifyObservations([]))
+      .toThrow("verifyObservations requires at least one observation");
+  });
   it("verifies independent sources within 1 percent", () => {
     const result = verifyObservations([
       makeObservation({ observationId: "eastmoney", value: "100" }),
@@ -40,6 +44,31 @@ describe("cross-source verification", () => {
       makeObservation({ value: "110", upstreamSourceId: "tushare" }),
     ]);
     expect(result).toMatchObject({ status: "failed", usable: false });
+  });
+
+  it("warns for a discrepancy between 1 and 5 percent", () => {
+    expect(verifyObservations([
+      makeObservation({ value: "100" }),
+      makeObservation({ value: "103", upstreamSourceId: "tushare" }),
+    ])).toMatchObject({
+      status: "warning",
+      usable: true,
+      reasonCodes: ["SOURCE_DISCREPANCY"],
+    });
+  });
+
+  it("fails incompatible observation groups", () => {
+    expect(verifyObservations([
+      makeObservation(),
+      makeObservation({
+        upstreamSourceId: "cninfo",
+        basis: { standard: "IFRS" },
+      }),
+    ])).toMatchObject({
+      status: "failed",
+      usable: false,
+      reasonCodes: ["ACCOUNTING_STANDARD_MISMATCH"],
+    });
   });
 
   it("uses official value but preserves a material conflict", () => {

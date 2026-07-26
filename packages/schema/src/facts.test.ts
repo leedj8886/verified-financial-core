@@ -101,6 +101,44 @@ describe("financial fact contracts", () => {
     })).toThrow("Presentation quarter is not allowed");
   });
 
+  it("enforces period selector quarter rules", () => {
+    expect(() => FactRequestSchema.parse({
+      instrument: "XSHG:600519",
+      requirements: [{
+        conceptId: "income.revenue",
+        required: true,
+        period: { fiscalYear: 2025, presentation: "quarter" },
+      }],
+      asOf: "2026-07-26T23:59:59+08:00",
+    })).toThrow("Quarter and YTD requirements need fiscalQuarter");
+    expect(() => FactRequestSchema.parse({
+      instrument: "XSHG:600519",
+      requirements: [{
+        conceptId: "income.revenue",
+        required: true,
+        period: {
+          fiscalYear: 2025,
+          fiscalQuarter: 4,
+          presentation: "annual",
+        },
+      }],
+      asOf: "2026-07-26T23:59:59+08:00",
+    })).toThrow("Annual requirements cannot specify fiscalQuarter");
+  });
+
+  it("requires instrument identity for instrument concepts", () => {
+    expect(() => ObservationSchema.parse({
+      ...observation,
+      concept: "market.price.close",
+      period: {
+        kind: "instant",
+        endDate: "2025-12-31",
+        fiscalYear: 2025,
+        presentation: "annual",
+      },
+    })).toThrow("Instrument-scoped concepts require instrumentId");
+  });
+
   it("keeps verification status and usability consistent", () => {
     expect(() => VerificationResultSchema.parse({
       verificationId: "vr:invalid",
@@ -110,6 +148,14 @@ describe("financial fact contracts", () => {
       independentUpstreamSourceIds: ["eastmoney"],
       reasonCodes: ["UNRESOLVED_SOURCE_CONFLICT"],
     })).toThrow("Failed verification cannot be usable");
+    expect(() => VerificationResultSchema.parse({
+      verificationId: "vr:invalid-warning",
+      status: "warning",
+      usable: false,
+      observationIds: ["obs:1"],
+      independentUpstreamSourceIds: ["eastmoney"],
+      reasonCodes: ["SINGLE_INDEPENDENT_SOURCE"],
+    })).toThrow("Verified or warning verification must be usable");
   });
 
   it("accepts an explicit failed empty FactSet", () => {

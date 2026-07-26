@@ -1,0 +1,14 @@
+[
+  {
+    "observationId": "obs:single:eastmoney",
+    "companyId": "company:golden",
+    "concept": "income.revenue",
+    "value": "100",
+    "unit": "CNY",
+    "scale": "1",
+    "period": {"kind": "duration", "startDate": "2025-01-01", "endDate": "2025-12-31", "fiscalYear": 2025, "presentation": "annual"},
+    "basis": {"standard": "CAS", "scope": "consolidated", "presentation": "reported", "attribution": "parent", "currency": "CNY"},
+    "availability": {"publishedAt": "2026-03-18T18:00:00+08:00", "fetchedAt": "2026-07-26T10:00:00+08:00"},
+    "provenance": {"providerId": "eastmoney-direct", "upstreamSourceId": "eastmoney", "sourceType": "aggregator", "sourceUrl": "https://example.invalid/eastmoney/single", "rawSnapshotId": "sha256:single-eastmoney", "rawField": "TOTAL_OPERATE_INCOME", "extractionMethod": "api", "fetchedAt": "2026-07-26T10:00:00+08:00", "transformations": []}
+  }
+]

@@ -39,6 +39,42 @@ describe("deterministic financial derivations", () => {
     ).value).toBe("85");
   });
 
+  it("rejects incompatible derivation inputs", () => {
+    expect(() => deriveTtmFlow({
+      currentYtd: makeFact({
+        currency: "CNY", fiscalYear: 2026,
+        fiscalQuarter: 1, presentation: "ytd",
+      }),
+      previousAnnual: makeFact({
+        currency: "HKD", fiscalYear: 2025, presentation: "annual",
+      }),
+      previousYtd: makeFact({
+        currency: "CNY", fiscalYear: 2025,
+        fiscalQuarter: 1, presentation: "ytd",
+      }),
+    })).toThrow("INCOMPATIBLE_DERIVATION_INPUTS");
+    expect(() => deriveFreeCashFlow(
+      makeFact({ concept: "cashFlow.operatingCashFlow" }),
+      makeFact({
+        concept: "cashFlow.capex",
+        period: { endDate: "2024-12-31", fiscalYear: 2024 },
+      }),
+    )).toThrow("INCOMPATIBLE_DERIVATION_INPUTS");
+  });
+
+  it("propagates warning status into derived facts", () => {
+    expect(deriveFreeCashFlow(
+      makeFact({
+        concept: "cashFlow.operatingCashFlow",
+        status: "warning",
+      }),
+      makeFact({ concept: "cashFlow.capex" }),
+    )).toMatchObject({
+      status: "warning",
+      reasonCodes: ["DERIVED_FROM_WARNING_INPUT"],
+    });
+  });
+
   it("uses average opening and closing equity for ROE", () => {
     expect(deriveRoe({
       netProfit: makeFact({
@@ -78,6 +114,25 @@ describe("deterministic financial derivations", () => {
       value: "21",
       period: { presentation: "ttm" },
     });
+  });
+
+  it("rejects zero ROE and PE denominators", () => {
+    expect(() => deriveRoe({
+      netProfit: makeFact({ concept: "income.netProfitParent" }),
+      openingEquity: makeFact({
+        concept: "balance.equity", value: "0",
+        period: { endDate: "2024-12-31", fiscalYear: 2024 },
+      }),
+      closingEquity: makeFact({ concept: "balance.equity", value: "0" }),
+    })).toThrow("INCOMPATIBLE_DERIVATION_INPUTS");
+    expect(() => derivePe(
+      makeFact({ concept: "market.price.close" }),
+      makeFact({
+        concept: "income.epsBasic",
+        value: "0",
+        presentation: "ttm",
+      }),
+    )).toThrow("INCOMPATIBLE_DERIVATION_INPUTS");
   });
 
   it("TTM obeys current YTD + annual - previous YTD", () => {

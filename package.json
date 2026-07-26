@@ -9,12 +9,14 @@
   "scripts": {
     "build": "pnpm -r build",
     "test": "pnpm --filter @verified-financial/schema build && vitest run",
+    "test:coverage": "pnpm --filter @verified-financial/schema build && vitest run --coverage",
     "test:watch": "pnpm --filter @verified-financial/schema build && vitest",
     "typecheck": "pnpm -r typecheck",
     "check": "pnpm typecheck && pnpm test && pnpm build"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
+    "@vitest/coverage-v8": "^3.2.0",
     "fast-check": "^4.0.0",
     "tsup": "^8.0.0",
     "typescript": "^5.9.0",
