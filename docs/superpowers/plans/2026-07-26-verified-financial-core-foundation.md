@@ -2569,7 +2569,7 @@ git commit -m "feat(core): add versioned financial derivations"
 - Create: `packages/core/src/fact-set.test.ts`
 - Modify: `packages/core/src/index.ts`
 
-- [ ] **Step 1: Write failing canonical-hash tests**
+- [x] **Step 1: Write failing canonical-hash tests**
 
 Create `packages/core/src/ids.test.ts`:
 
@@ -2594,7 +2594,7 @@ describe("deterministic IDs", () => {
 });
 ```
 
-- [ ] **Step 2: Run ID tests and verify RED**
+- [x] **Step 2: Run ID tests and verify RED**
 
 Run:
 
@@ -2604,7 +2604,7 @@ pnpm --filter @verified-financial/core test -- src/ids.test.ts
 
 Expected: FAIL because `ids.ts` does not exist.
 
-- [ ] **Step 3: Implement canonical hashing**
+- [x] **Step 3: Implement canonical hashing**
 
 Create `packages/core/src/ids.ts`:
 
@@ -2637,7 +2637,7 @@ export function stableId(prefix: string, value: unknown): string {
 }
 ```
 
-- [ ] **Step 4: Write failing FactSet assembly tests**
+- [x] **Step 4: Write failing FactSet assembly tests**
 
 Create `packages/core/src/fact-set.test.ts`:
 
@@ -2807,7 +2807,7 @@ describe("FactSet assembly", () => {
 });
 ```
 
-- [ ] **Step 5: Implement FactSet assembly**
+- [x] **Step 5: Implement FactSet assembly**
 
 Create `packages/core/src/fact-set.ts` with:
 
@@ -2948,7 +2948,7 @@ export function buildFactSet(input: BuildFactSetInput): VerifiedFactSet {
 }
 ```
 
-- [ ] **Step 6: Export and verify deterministic FactSets**
+- [x] **Step 6: Export and verify deterministic FactSets**
 
 Add to `packages/core/src/index.ts`:
 
@@ -2966,7 +2966,7 @@ pnpm --filter @verified-financial/core typecheck
 
 Expected: all ID and FactSet tests PASS.
 
-- [ ] **Step 7: Commit FactSet assembly**
+- [x] **Step 7: Commit FactSet assembly**
 
 ```bash
 git add packages/core/src
