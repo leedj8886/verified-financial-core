@@ -747,7 +747,7 @@ git commit -m "feat(schema): separate company and instrument identity"
 - Create: `packages/schema/src/provenance.test.ts`
 - Modify: `packages/schema/src/index.ts`
 
-- [ ] **Step 1: Write failing period and as-of tests**
+- [x] **Step 1: Write failing period and as-of tests**
 
 Create `packages/schema/src/period.test.ts`:
 
@@ -816,7 +816,7 @@ describe("reporting period and availability", () => {
 });
 ```
 
-- [ ] **Step 2: Run the period test and verify RED**
+- [x] **Step 2: Run the period test and verify RED**
 
 Run:
 
@@ -826,7 +826,7 @@ pnpm --filter @verified-financial/schema test -- src/period.test.ts
 
 Expected: FAIL because `./period.js` does not exist.
 
-- [ ] **Step 3: Implement periods and availability**
+- [x] **Step 3: Implement periods and availability**
 
 Create `packages/schema/src/period.ts`:
 
@@ -877,7 +877,7 @@ export function isAvailableAsOf(availability: Availability, asOf: string): boole
 }
 ```
 
-- [ ] **Step 4: Write failing provenance tests**
+- [x] **Step 4: Write failing provenance tests**
 
 Create `packages/schema/src/provenance.test.ts`:
 
@@ -916,7 +916,7 @@ describe("provenance", () => {
 });
 ```
 
-- [ ] **Step 5: Implement accounting and provenance**
+- [x] **Step 5: Implement accounting and provenance**
 
 Create `packages/schema/src/accounting.ts`:
 
@@ -960,7 +960,7 @@ export const ProvenanceSchema = z.object({
 export type Provenance = z.infer<typeof ProvenanceSchema>;
 ```
 
-- [ ] **Step 6: Export and verify temporal and lineage contracts**
+- [x] **Step 6: Export and verify temporal and lineage contracts**
 
 Add to `packages/schema/src/index.ts`:
 
@@ -979,7 +979,7 @@ pnpm --filter @verified-financial/schema typecheck
 
 Expected: all schema tests PASS.
 
-- [ ] **Step 7: Commit periods, accounting, and provenance**
+- [x] **Step 7: Commit periods, accounting, and provenance**
 
 ```bash
 git add packages/schema/src
