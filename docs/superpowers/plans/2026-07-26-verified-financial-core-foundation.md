@@ -1,8 +1,8 @@
 # Verified Financial Core Foundation Implementation Plan
 
-> **For Codex:** REQUIRED SUB-SKILL: Use superpowers:executing-plans and execute
-> this plan inline, task-by-task, without subagent delegation. Steps use checkbox
-> (`- [ ]`) syntax for tracking.
+> **Execution mode:** Execute this plan inline, task-by-task, without worktrees,
+> subagent delegation, or Superpowers skills unless the user explicitly requests
+> them. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Build the offline, provider-independent TypeScript foundation that defines canonical financial facts, validates compatible observations, calculates deterministic derivations, and emits reproducible `VerifiedFactSet` objects.
 
@@ -29,9 +29,11 @@ Do not start a successor plan until the current package APIs and quality gate pa
 ```text
 package.json                         workspace scripts and pinned toolchain
 .node-version                       Node.js major-version contract
+.npmrc                              project-local official npm registry
+AGENTS.md                            project execution constraints
 pnpm-workspace.yaml                  workspace package discovery
 tsconfig.base.json                   shared strict compiler settings
-vitest.workspace.ts                  package test projects
+vitest.config.ts                     package test projects
 .gitignore                           generated and local state exclusions
 packages/schema/package.json         schema package metadata
 packages/schema/tsconfig.json        schema compiler settings
@@ -65,9 +67,11 @@ tests/golden/foundation/*.json       provider-neutral Golden fixtures
 **Files:**
 - Create: `package.json`
 - Create: `.node-version`
+- Create: `.npmrc`
+- Create: `AGENTS.md`
 - Create: `pnpm-workspace.yaml`
 - Create: `tsconfig.base.json`
-- Create: `vitest.workspace.ts`
+- Create: `vitest.config.ts`
 - Create: `.gitignore`
 - Create: `packages/schema/package.json`
 - Create: `packages/schema/tsconfig.json`
@@ -78,7 +82,7 @@ tests/golden/foundation/*.json       provider-neutral Golden fixtures
 - Create: `packages/core/tsup.config.ts`
 - Create: `packages/core/src/index.ts`
 
-- [ ] **Step 1: Add the workspace manifest**
+- [x] **Step 1: Add the workspace manifest**
 
 Create `package.json`:
 
@@ -114,6 +118,31 @@ Create `.node-version`:
 24.16.0
 ```
 
+Create `.npmrc`:
+
+```ini
+registry=https://registry.npmjs.org/
+```
+
+Create `AGENTS.md` with the repository constraints from the approved design:
+
+```md
+# Project Agent Instructions
+
+- All runtime and library code in this repository must use TypeScript.
+- Work directly in this repository with inline execution.
+- Do not create a Git worktree unless the user explicitly requests one.
+- Do not invoke Superpowers skills unless the user explicitly requests them.
+- Tushare must remain an optional provider; the core and default tests cannot
+  require a Tushare token or interface ledger.
+- Dependency installation for this repository uses the project-local official
+  npm registry configured in `.npmrc`; do not change the user's global registry.
+- Keep Research CI downstream of `VerifiedFactSet`; it must not implement an
+  independent financial-data layer.
+- Before claiming completion, run the smallest relevant tests plus typecheck
+  and build for the changed packages.
+```
+
 Create `pnpm-workspace.yaml`:
 
 ```yaml
@@ -127,6 +156,7 @@ Create `.gitignore`:
 
 ```gitignore
 node_modules/
+.pnpm-store/
 dist/
 coverage/
 *.tsbuildinfo
@@ -137,7 +167,7 @@ coverage/
 data/
 ```
 
-- [ ] **Step 2: Add shared TypeScript and Vitest configuration**
+- [x] **Step 2: Add shared TypeScript and Vitest configuration**
 
 Create `tsconfig.base.json`:
 
@@ -161,17 +191,20 @@ Create `tsconfig.base.json`:
 }
 ```
 
-Create `vitest.workspace.ts`:
+Create `vitest.config.ts`:
 
 ```ts
-import { defineWorkspace } from "vitest/config";
+import { defineConfig } from "vitest/config";
 
-export default defineWorkspace([
-  "packages/*/vitest.config.ts",
-]);
+export default defineConfig({
+  test: {
+    projects: ["packages/*/vitest.config.ts"],
+    passWithNoTests: true,
+  },
+});
 ```
 
-- [ ] **Step 3: Add the schema package shell**
+- [x] **Step 3: Add the schema package shell**
 
 Create `packages/schema/package.json`:
 
@@ -247,7 +280,7 @@ export default defineConfig({
 
 Create an empty `packages/schema/src/index.ts`.
 
-- [ ] **Step 4: Add the core package shell**
+- [x] **Step 4: Add the core package shell**
 
 Create `packages/core/package.json`:
 
@@ -326,7 +359,7 @@ export default defineConfig({
 
 Create an empty `packages/core/src/index.ts`.
 
-- [ ] **Step 5: Verify the runtime prerequisite**
+- [x] **Step 5: Verify the runtime prerequisite**
 
 Run:
 
@@ -341,7 +374,7 @@ resolves stale `/usr/local/bin` copies (`v16.17.0` / `7.5.2`), so Codex must run
 implementation commands through the interactive zsh environment; no runtime
 installation or global package-manager change is required.
 
-- [ ] **Step 6: Install and verify the empty workspace**
+- [x] **Step 6: Install and verify the empty workspace**
 
 Run:
 
@@ -362,7 +395,7 @@ Expected:
 - [ ] **Step 7: Commit the workspace scaffold**
 
 ```bash
-git add package.json .node-version pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json vitest.workspace.ts .gitignore packages
+git add AGENTS.md package.json .node-version .npmrc pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json vitest.config.ts .gitignore packages
 git commit -m "chore: scaffold TypeScript financial core workspace"
 ```
 

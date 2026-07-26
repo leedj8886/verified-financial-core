@@ -1,0 +1,23 @@
+{
+  "name": "verified-financial-core",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "packageManager": "pnpm@8.15.6",
+  "scripts": {
+    "build": "pnpm -r build",
+    "test": "pnpm --filter @verified-financial/schema build && vitest run",
+    "test:watch": "pnpm --filter @verified-financial/schema build && vitest",
+    "typecheck": "pnpm -r typecheck",
+    "check": "pnpm typecheck && pnpm test && pnpm build"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "fast-check": "^4.0.0",
+    "tsup": "^8.0.0",
+    "typescript": "^5.9.0",
+    "vitest": "^3.2.0"
+  }
+}

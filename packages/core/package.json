@@ -1,0 +1,29 @@
+{
+  "name": "@verified-financial/core",
+  "version": "0.1.0",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "pnpm --filter @verified-financial/schema build && tsup",
+    "test": "pnpm --filter @verified-financial/schema build && vitest run",
+    "typecheck": "pnpm --filter @verified-financial/schema build && tsc --noEmit"
+  },
+  "dependencies": {
+    "@verified-financial/schema": "workspace:*",
+    "decimal.js": "^10.5.0"
+  },
+  "devDependencies": {
+    "fast-check": "^4.0.0",
+    "tsup": "^8.0.0",
+    "typescript": "^5.9.0",
+    "vitest": "^3.2.0"
+  }
+}
