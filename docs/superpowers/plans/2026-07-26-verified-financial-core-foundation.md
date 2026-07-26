@@ -2103,7 +2103,7 @@ git commit -m "feat(core): verify compatible observations across sources"
 - Create: `packages/core/src/derivations.test.ts`
 - Modify: `packages/core/src/index.ts`
 
-- [ ] **Step 1: Write failing derivation tests**
+- [x] **Step 1: Write failing derivation tests**
 
 Create `packages/core/src/derivations.test.ts`:
 
@@ -2188,7 +2188,7 @@ describe("deterministic financial derivations", () => {
 });
 ```
 
-- [ ] **Step 2: Run derivation tests and verify RED**
+- [x] **Step 2: Run derivation tests and verify RED**
 
 Run:
 
@@ -2198,7 +2198,7 @@ pnpm --filter @verified-financial/core test -- src/derivations.test.ts
 
 Expected: FAIL because the derivation functions do not exist.
 
-- [ ] **Step 3: Implement formula-versioned derivations**
+- [x] **Step 3: Implement formula-versioned derivations**
 
 Create `packages/core/src/derivations.ts`:
 
@@ -2503,7 +2503,7 @@ export function derivePe(
 Canonical source mappings normalize capex to a positive cash outflow before
 `deriveFreeCashFlow` is called; this function therefore always subtracts capex.
 
-- [ ] **Step 4: Run focused derivation tests**
+- [x] **Step 4: Run focused derivation tests**
 
 Run:
 
@@ -2513,7 +2513,7 @@ pnpm --filter @verified-financial/core test -- src/derivations.test.ts
 
 Expected: all TTM, FCF, ROE, market-cap, and PE cases PASS.
 
-- [ ] **Step 5: Add property tests for exact arithmetic**
+- [x] **Step 5: Add property tests for exact arithmetic**
 
 Add the following test to `derivations.test.ts`; `Decimal` and `fc` are already
 imported in Step 1:
@@ -2536,7 +2536,7 @@ it("TTM obeys current YTD + annual - previous YTD", () => {
 });
 ```
 
-- [ ] **Step 6: Export and run the core package gate**
+- [x] **Step 6: Export and run the core package gate**
 
 Add to `packages/core/src/index.ts`:
 
@@ -2553,7 +2553,7 @@ pnpm --filter @verified-financial/core typecheck
 
 Expected: all core tests PASS.
 
-- [ ] **Step 7: Commit derivations**
+- [x] **Step 7: Commit derivations**
 
 ```bash
 git add packages/core/src
