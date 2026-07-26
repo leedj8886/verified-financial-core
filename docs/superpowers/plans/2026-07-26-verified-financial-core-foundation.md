@@ -392,7 +392,7 @@ Expected:
 - Vitest exits successfully with no test files;
 - both packages emit ESM and declaration files under `dist/`.
 
-- [ ] **Step 7: Commit the workspace scaffold**
+- [x] **Step 7: Commit the workspace scaffold**
 
 ```bash
 git add AGENTS.md package.json .node-version .npmrc pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json vitest.config.ts .gitignore packages
@@ -408,7 +408,7 @@ git commit -m "chore: scaffold TypeScript financial core workspace"
 - Create: `packages/schema/src/concepts.test.ts`
 - Modify: `packages/schema/src/index.ts`
 
-- [ ] **Step 1: Write failing decimal-string tests**
+- [x] **Step 1: Write failing decimal-string tests**
 
 Create `packages/schema/src/value.test.ts`:
 
@@ -427,7 +427,7 @@ describe("DecimalStringSchema", () => {
 });
 ```
 
-- [ ] **Step 2: Run the value test and verify RED**
+- [x] **Step 2: Run the value test and verify RED**
 
 Run:
 
@@ -437,7 +437,7 @@ pnpm --filter @verified-financial/schema test -- src/value.test.ts
 
 Expected: FAIL because `./value.js` does not exist.
 
-- [ ] **Step 3: Implement the decimal-string schema**
+- [x] **Step 3: Implement the decimal-string schema**
 
 Create `packages/schema/src/value.ts`:
 
@@ -454,7 +454,7 @@ export const DecimalStringSchema = z
 export type DecimalString = z.infer<typeof DecimalStringSchema>;
 ```
 
-- [ ] **Step 4: Run the value test and verify GREEN**
+- [x] **Step 4: Run the value test and verify GREEN**
 
 Run:
 
@@ -464,7 +464,7 @@ pnpm --filter @verified-financial/schema test -- src/value.test.ts
 
 Expected: all decimal-string cases PASS.
 
-- [ ] **Step 5: Write failing concept-registry tests**
+- [x] **Step 5: Write failing concept-registry tests**
 
 Create `packages/schema/src/concepts.test.ts`:
 
@@ -496,7 +496,7 @@ describe("canonical concept registry", () => {
 });
 ```
 
-- [ ] **Step 6: Run the concept test and verify RED**
+- [x] **Step 6: Run the concept test and verify RED**
 
 Run:
 
@@ -506,7 +506,7 @@ pnpm --filter @verified-financial/schema test -- src/concepts.test.ts
 
 Expected: FAIL because `./concepts.js` does not exist.
 
-- [ ] **Step 7: Implement the versioned concept registry**
+- [x] **Step 7: Implement the versioned concept registry**
 
 Create `packages/schema/src/concepts.ts`:
 
@@ -552,26 +552,30 @@ export interface ConceptDefinition {
   allowedPresentations: readonly ("quarter" | "ytd" | "annual" | "ttm")[];
 }
 
-export const CONCEPT_REGISTRY = Object.fromEntries(
-  Object.entries(conceptDefinitions).map(([conceptId, definition]) => [
-    conceptId,
-    {
+function buildConceptRegistry(): Record<ConceptId, ConceptDefinition> {
+  const registry = {} as Record<ConceptId, ConceptDefinition>;
+  for (const conceptId of Object.keys(conceptDefinitions) as ConceptId[]) {
+    const definition = conceptDefinitions[conceptId];
+    registry[conceptId] = {
       conceptId,
       valueType: definition[0],
       scope: definition[1],
       periodKind: definition[2],
       canonicalUnit: definition[3],
       allowedPresentations: definition[4],
-    },
-  ]),
-) as Record<ConceptId, ConceptDefinition>;
+    };
+  }
+  return registry;
+}
+
+export const CONCEPT_REGISTRY = buildConceptRegistry();
 
 export function getConceptDefinition(conceptId: ConceptId): ConceptDefinition {
   return CONCEPT_REGISTRY[conceptId];
 }
 ```
 
-- [ ] **Step 8: Export and verify values and concepts**
+- [x] **Step 8: Export and verify values and concepts**
 
 Replace `packages/schema/src/index.ts` with:
 
