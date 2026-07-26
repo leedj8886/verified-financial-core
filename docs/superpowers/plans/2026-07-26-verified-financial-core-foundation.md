@@ -593,7 +593,7 @@ pnpm --filter @verified-financial/schema typecheck
 
 Expected: all schema tests PASS and typecheck exits 0.
 
-- [ ] **Step 9: Commit exact values and concepts**
+- [x] **Step 9: Commit exact values and concepts**
 
 ```bash
 git add packages/schema/src
@@ -607,7 +607,7 @@ git commit -m "feat(schema): define exact values and canonical concepts"
 - Create: `packages/schema/src/identity.test.ts`
 - Modify: `packages/schema/src/index.ts`
 
-- [ ] **Step 1: Write failing identity tests**
+- [x] **Step 1: Write failing identity tests**
 
 Create `packages/schema/src/identity.test.ts`:
 
@@ -655,7 +655,7 @@ describe("financial identity", () => {
 });
 ```
 
-- [ ] **Step 2: Run the identity test and verify RED**
+- [x] **Step 2: Run the identity test and verify RED**
 
 Run:
 
@@ -665,7 +665,7 @@ pnpm --filter @verified-financial/schema test -- src/identity.test.ts
 
 Expected: FAIL because `./identity.js` does not exist.
 
-- [ ] **Step 3: Implement identity schemas and invariants**
+- [x] **Step 3: Implement identity schemas and invariants**
 
 Create `packages/schema/src/identity.ts`:
 
@@ -713,7 +713,7 @@ export function canonicalInstrumentId(exchangeMic: ExchangeMic, symbol: string):
 }
 ```
 
-- [ ] **Step 4: Export and verify identity**
+- [x] **Step 4: Export and verify identity**
 
 Add to `packages/schema/src/index.ts`:
 
