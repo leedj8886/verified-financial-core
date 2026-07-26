@@ -1796,7 +1796,7 @@ git commit -m "feat(core): enforce observation compatibility and source independ
 - Create: `packages/core/src/verification.test.ts`
 - Modify: `packages/core/src/index.ts`
 
-- [ ] **Step 1: Write failing verification tests**
+- [x] **Step 1: Write failing verification tests**
 
 Create `packages/core/src/verification.test.ts`:
 
@@ -1908,7 +1908,7 @@ describe("cross-source verification", () => {
 });
 ```
 
-- [ ] **Step 2: Run verification tests and verify RED**
+- [x] **Step 2: Run verification tests and verify RED**
 
 Run:
 
@@ -1918,13 +1918,13 @@ pnpm --filter @verified-financial/core test -- src/verification.test.ts
 
 Expected: FAIL because `verifyObservations` does not exist.
 
-- [ ] **Step 3: Implement Decimal-based verification**
+- [x] **Step 3: Implement Decimal-based verification**
 
 Create `packages/core/src/verification.ts` with:
 
 ```ts
 import { createHash } from "node:crypto";
-import Decimal from "decimal.js";
+import { Decimal } from "decimal.js";
 import type {
   CanonicalFact,
   Observation,
@@ -2072,7 +2072,7 @@ export function verifyAndMaterializeFact(
 }
 ```
 
-- [ ] **Step 4: Export and verify the engine**
+- [x] **Step 4: Export and verify the engine**
 
 Add to `packages/core/src/index.ts`:
 
@@ -2089,7 +2089,7 @@ pnpm --filter @verified-financial/core typecheck
 
 Expected: all verification tests PASS with exact Decimal comparisons.
 
-- [ ] **Step 5: Commit verification**
+- [x] **Step 5: Commit verification**
 
 ```bash
 git add packages/core/src
@@ -2108,7 +2108,7 @@ git commit -m "feat(core): verify compatible observations across sources"
 Create `packages/core/src/derivations.test.ts`:
 
 ```ts
-import Decimal from "decimal.js";
+import { Decimal } from "decimal.js";
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import {
