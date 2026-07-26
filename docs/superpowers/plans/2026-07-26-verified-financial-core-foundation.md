@@ -8,7 +8,7 @@
 
 **Architecture:** The pnpm workspace starts with two publishable packages: `@verified-financial/schema` owns runtime-safe Zod contracts and the canonical concept registry; `@verified-financial/core` owns compatibility, source independence, validation, derivations, deterministic IDs, and FactSet assembly. Neither package performs network or filesystem I/O, so all behavior is deterministic and testable with inline fixtures.
 
-**Tech Stack:** TypeScript strict ESM, Node.js 22+, pnpm workspaces, Zod, decimal.js, Vitest, fast-check, tsup.
+**Tech Stack:** TypeScript strict ESM, Node.js 24 (minimum 22), pnpm workspaces, Zod, decimal.js, Vitest, fast-check, tsup.
 
 ---
 
@@ -90,7 +90,7 @@ Create `package.json`:
   "engines": {
     "node": ">=22"
   },
-  "packageManager": "pnpm@10.13.1",
+  "packageManager": "pnpm@8.15.6",
   "scripts": {
     "build": "pnpm -r build",
     "test": "pnpm --filter @verified-financial/schema build && vitest run",
@@ -111,7 +111,7 @@ Create `package.json`:
 Create `.node-version`:
 
 ```text
-22
+24.16.0
 ```
 
 Create `pnpm-workspace.yaml`:
@@ -335,11 +335,11 @@ node --version
 pnpm --version
 ```
 
-Expected: Node prints `v22.x` and pnpm prints `10.13.1`. The planning shell
-reported Node `v16.17.0` and pnpm `7.5.2` on 2026-07-26, so do not start package
-installation until Node 22 and the package-manager version declared in
-`package.json` are active. Provisioning a global runtime is outside this
-repository plan and requires explicit user approval.
+Expected: Node prints `v24.16.0` and pnpm prints `8.15.6`. The user's
+interactive shell already provides both through NVM. Codex's login-only shell
+resolves stale `/usr/local/bin` copies (`v16.17.0` / `7.5.2`), so Codex must run
+implementation commands through the interactive zsh environment; no runtime
+installation or global package-manager change is required.
 
 - [ ] **Step 6: Install and verify the empty workspace**
 
@@ -3281,7 +3281,7 @@ Replace the root `package.json` with:
   "engines": {
     "node": ">=22"
   },
-  "packageManager": "pnpm@10.13.1",
+  "packageManager": "pnpm@8.15.6",
   "scripts": {
     "build": "pnpm -r build",
     "test": "pnpm --filter @verified-financial/schema build && vitest run",
