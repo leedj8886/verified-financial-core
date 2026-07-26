@@ -241,6 +241,7 @@ balance.cash
 cashFlow.operatingCashFlow
 cashFlow.capex
 cashFlow.freeCashFlow
+profitability.roe
 distribution.dividendPerShare
 ```
 
@@ -425,13 +426,19 @@ FCF 不得使用“经营现金流加全部投资现金流”的旧 Dexter 简�
 查询必须区分必需字段和可选字段：
 
 ```ts
+interface FactRequirement {
+  conceptId: string;
+  required: boolean;
+  period?: {
+    fiscalYear: number;
+    fiscalQuarter?: 1 | 2 | 3 | 4;
+    presentation: "quarter" | "ytd" | "annual" | "ttm";
+  };
+}
+
 interface FactRequest {
   instrument: string;
-  concepts: Array<{
-    conceptId: string;
-    required: boolean;
-  }>;
-  periods: string[];
+  requirements: FactRequirement[];
   asOf: string;
   freshness?: FreshnessPolicy;
 }
@@ -453,6 +460,7 @@ interface VerifiedFactSet {
   unmapped: UnmappedObservation[];
   validations: VerificationResult[];
   rawSnapshotIds: string[];
+  reasonCodes: string[];
   summary: {
     verified: number;
     warnings: number;
@@ -465,12 +473,14 @@ interface VerifiedFactSet {
 
 `overallStatus` 汇总规则：
 
-- 任一必需 concept 没有可用 Fact，或其 Fact 为 `failed`：`failed`。
+- 任一必需 requirement（concept + 可选 period）没有可用 Fact，或其 Fact 为
+  `failed`：`failed`。
 - 所有必需 Fact 可用，但任一必需 Fact 为 `warning`：`warning`。
 - 所有必需 Fact 均为 `verified`，但可选 Fact 有 warning、failed 或 unmapped：
   `warning`。
 - 所有返回 Fact 均为 `verified`，且没有未解决错误：`verified`。
-- 请求没有产生任何 Fact：`failed`，reason code 为 `EMPTY_FACT_SET`。
+- 请求没有产生任何 Fact：返回结构完整的 `failed` FactSet，顶层 reason code
+  为 `EMPTY_FACT_SET`。
 
 `factSetId` 由规范化请求、参与的原始快照哈希、mapping 版本、公式版本和验证
 规则版本共同确定。同样输入和同样版本必须产生相同 FactSet。
