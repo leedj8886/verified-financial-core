@@ -25,6 +25,7 @@ export interface BuildFactSetInput {
   rawSnapshotIds: string[];
   mappingVersions: string[];
   validationRulesVersion: string;
+  reasonCodes?: string[];
 }
 
 function matchesRequirement(
@@ -64,6 +65,7 @@ export function buildFactSet(input: BuildFactSetInput): VerifiedFactSet {
   );
   const rawSnapshotIds = sortedUnique(input.rawSnapshotIds);
   const mappingVersions = sortedUnique(input.mappingVersions);
+  const inputReasonCodes = sortedUnique(input.reasonCodes ?? []);
   const missingRequired = normalizedRequest.requirements.filter(
     (requirement) => requirement.required
       && !facts.some(
@@ -89,9 +91,17 @@ export function buildFactSet(input: BuildFactSetInput): VerifiedFactSet {
   const isEmpty = facts.length === 0;
   const overallStatus = isEmpty || missingRequired.length > 0
     ? "failed"
-    : warnings > 0 || failedFacts > 0 || hasOptionalGap
+    : warnings > 0
+        || failedFacts > 0
+        || hasOptionalGap
+        || inputReasonCodes.length > 0
       ? "warning"
       : "verified";
+  const reasonCodes = isEmpty
+    ? ["EMPTY_FACT_SET", ...inputReasonCodes.filter(
+        (reasonCode) => reasonCode !== "EMPTY_FACT_SET",
+      )]
+    : inputReasonCodes;
 
   const identityPayload = {
     schemaVersion: input.schemaVersion,
@@ -106,6 +116,7 @@ export function buildFactSet(input: BuildFactSetInput): VerifiedFactSet {
     mappingVersions,
     formulas: FORMULAS,
     validationRulesVersion: input.validationRulesVersion,
+    reasonCodes,
   };
 
   return VerifiedFactSetSchema.parse({
@@ -119,7 +130,7 @@ export function buildFactSet(input: BuildFactSetInput): VerifiedFactSet {
     unmapped,
     validations,
     rawSnapshotIds,
-    reasonCodes: isEmpty ? ["EMPTY_FACT_SET"] : [],
+    reasonCodes,
     summary: {
       verified,
       warnings,

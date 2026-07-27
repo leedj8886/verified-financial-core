@@ -1,0 +1,193 @@
+import {
+  CompanySchema,
+  FactRequirementSchema,
+  InstrumentSchema,
+  ObservationSchema,
+  UnmappedObservationSchema,
+  type Company,
+  type FactRequirement,
+  type Instrument,
+  type Observation,
+  type UnmappedObservation,
+} from "@verified-financial/schema";
+import { z } from "zod";
+
+export const ProviderCapabilitySchema = z.enum([
+  "identity",
+  "market",
+  "financials",
+  "dividends",
+  "valuation",
+  "filings",
+]);
+export type ProviderCapability = z.infer<typeof ProviderCapabilitySchema>;
+
+export const ProviderErrorCodeSchema = z.enum([
+  "TIMEOUT",
+  "RATE_LIMITED",
+  "AUTH_REQUIRED",
+  "UPSTREAM_SCHEMA_CHANGED",
+  "EMPTY_RESPONSE",
+  "PARSE_FAILED",
+  "UNSUPPORTED_INSTRUMENT",
+  "OFFICIAL_DOCUMENT_UNREADABLE",
+]);
+export type ProviderErrorCode = z.infer<typeof ProviderErrorCodeSchema>;
+
+export const ProviderIssueSchema = z.object({
+  providerId: z.string().min(1),
+  code: ProviderErrorCodeSchema,
+  message: z.string().min(1),
+  retryable: z.boolean(),
+});
+export type ProviderIssue = z.infer<typeof ProviderIssueSchema>;
+
+export const SnapshotMediaTypeSchema = z.enum(["json", "html", "pdf"]);
+export type SnapshotMediaType = z.infer<typeof SnapshotMediaTypeSchema>;
+
+const RawSnapshotMetadataSchema = z.object({
+  providerId: z.string().min(1),
+  sourceUrl: z.string().url(),
+  mediaType: SnapshotMediaTypeSchema,
+  fetchedAt: z.string().datetime({ offset: true }),
+});
+
+export const RawSnapshotInputSchema = RawSnapshotMetadataSchema.extend({
+  body: z.union([z.string(), z.instanceof(Uint8Array)]),
+});
+export type RawSnapshotInput = z.infer<typeof RawSnapshotInputSchema>;
+
+export const StoredSnapshotRefSchema = RawSnapshotMetadataSchema.extend({
+  snapshotId: z.string().regex(/^sha256:[a-f0-9]{64}$/),
+  byteLength: z.number().int().nonnegative(),
+});
+export type StoredSnapshotRef = z.infer<typeof StoredSnapshotRefSchema>;
+
+export interface SnapshotWriter {
+  put(input: RawSnapshotInput): Promise<StoredSnapshotRef>;
+}
+
+export const ProviderRequestSchema = z.object({
+  instrument: InstrumentSchema,
+  requirements: z.array(FactRequirementSchema).min(1),
+  asOf: z.string().datetime({ offset: true }),
+  offline: z.boolean(),
+});
+export interface ProviderRequest {
+  instrument: Instrument;
+  requirements: FactRequirement[];
+  asOf: string;
+  offline: boolean;
+}
+
+export const ProviderBatchSchema = z.object({
+  providerId: z.string().min(1),
+  upstreamSourceId: z.string().min(1),
+  company: CompanySchema,
+  instruments: z.array(InstrumentSchema).min(1),
+  observations: z.array(ObservationSchema),
+  unmapped: z.array(UnmappedObservationSchema),
+  rawSnapshots: z.array(StoredSnapshotRefSchema),
+  mappingVersions: z.array(z.string().min(1)).min(1),
+  issues: z.array(ProviderIssueSchema),
+}).superRefine((batch, context) => {
+  const snapshotIds = new Set(
+    batch.rawSnapshots.map((snapshot) => snapshot.snapshotId),
+  );
+  for (const instrument of batch.instruments) {
+    if (instrument.companyId !== batch.company.companyId) {
+      context.addIssue({
+        code: "custom",
+        message: "Provider instrument belongs to a different company",
+      });
+    }
+  }
+  for (const observation of batch.observations) {
+    if (observation.companyId !== batch.company.companyId) {
+      context.addIssue({
+        code: "custom",
+        message: "Provider observation belongs to a different company",
+      });
+    }
+    if (observation.provenance.providerId !== batch.providerId) {
+      context.addIssue({
+        code: "custom",
+        message: "Observation providerId does not match its batch",
+      });
+    }
+    if (
+      observation.provenance.upstreamSourceId !== batch.upstreamSourceId
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "Observation upstreamSourceId does not match its batch",
+      });
+    }
+    if (!snapshotIds.has(observation.provenance.rawSnapshotId)) {
+      context.addIssue({
+        code: "custom",
+        message: "Observation references a snapshot outside its batch",
+      });
+    }
+  }
+  for (const issue of batch.issues) {
+    if (issue.providerId !== batch.providerId) {
+      context.addIssue({
+        code: "custom",
+        message: "Provider issue does not match its batch",
+      });
+    }
+  }
+});
+
+export interface ProviderBatch {
+  providerId: string;
+  upstreamSourceId: string;
+  company: Company;
+  instruments: Instrument[];
+  observations: Observation[];
+  unmapped: UnmappedObservation[];
+  rawSnapshots: StoredSnapshotRef[];
+  mappingVersions: string[];
+  issues: ProviderIssue[];
+}
+
+export interface ProviderContext {
+  signal: AbortSignal;
+  now: string;
+  snapshots: SnapshotWriter;
+}
+
+export interface SourceProvider {
+  readonly providerId: string;
+  readonly upstreamSourceId: string;
+  readonly capabilities: readonly ProviderCapability[];
+  fetch(
+    request: ProviderRequest,
+    context: ProviderContext,
+  ): Promise<ProviderBatch>;
+}
+
+export class ProviderFailure extends Error {
+  readonly issue: ProviderIssue;
+
+  constructor(issue: ProviderIssue) {
+    super(issue.message);
+    this.name = "ProviderFailure";
+    this.issue = ProviderIssueSchema.parse(issue);
+  }
+}
+
+export function parseProviderBatch(
+  provider: SourceProvider,
+  value: unknown,
+): ProviderBatch {
+  const batch = ProviderBatchSchema.parse(value);
+  if (
+    batch.providerId !== provider.providerId
+    || batch.upstreamSourceId !== provider.upstreamSourceId
+  ) {
+    throw new Error("PROVIDER_IDENTITY_MISMATCH");
+  }
+  return batch;
+}

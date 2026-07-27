@@ -1,0 +1,26 @@
+{
+  "name": "@verified-financial/ah-gateway-cli",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "ah-context": "./dist/bin.js"
+  },
+  "scripts": {
+    "build": "tsup",
+    "test": "pnpm --filter @verified-financial/ah-gateway-cli... build && vitest run",
+    "typecheck": "pnpm --filter @verified-financial/ah-gateway-cli... build && tsc --noEmit",
+    "typecheck:local": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@verified-financial/provider-contract": "workspace:*",
+    "@verified-financial/schema": "workspace:*",
+    "@verified-financial/sdk": "workspace:*",
+    "@verified-financial/storage": "workspace:*"
+  },
+  "devDependencies": {
+    "tsup": "^8.0.0",
+    "typescript": "^5.9.0",
+    "vitest": "^3.2.0"
+  }
+}

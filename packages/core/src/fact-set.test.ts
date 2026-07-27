@@ -96,6 +96,19 @@ describe("FactSet assembly", () => {
     expect(factSet.summary.overallStatus).toBe("warning");
   });
 
+  it("preserves Gateway issues and downgrades an otherwise verified set", () => {
+    const factSet = buildFactSet(makeBuildInput({
+      reasonCodes: [
+        "PROVIDER_FAILURE:fixture:TIMEOUT",
+        "PROVIDER_FAILURE:fixture:TIMEOUT",
+      ],
+    }));
+    expect(factSet).toMatchObject({
+      reasonCodes: ["PROVIDER_FAILURE:fixture:TIMEOUT"],
+      summary: { overallStatus: "warning" },
+    });
+  });
+
   it("normalizes unordered collections before hashing", () => {
     const revenue = makeFact({ factId: "fact:revenue" });
     const cash = makeFact({

@@ -1,6 +1,6 @@
 # Verified Financial Core 与 A/H Gateway 设计
 
-- 状态：已确认，待实施计划
+- 状态：实施中（Foundation 与 storage/Gateway 基础设施已完成）
 - 日期：2026-07-26
 - 首个市场范围：A 股与 H 股
 - 实现语言：TypeScript
