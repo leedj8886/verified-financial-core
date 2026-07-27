@@ -29,9 +29,18 @@ importers:
 
   apps/ah-gateway-cli:
     dependencies:
+      '@verified-financial/provider-baidu':
+        specifier: workspace:*
+        version: link:../../packages/provider-baidu
       '@verified-financial/provider-contract':
         specifier: workspace:*
         version: link:../../packages/provider-contract
+      '@verified-financial/provider-eastmoney':
+        specifier: workspace:*
+        version: link:../../packages/provider-eastmoney
+      '@verified-financial/provider-tencent':
+        specifier: workspace:*
+        version: link:../../packages/provider-tencent
       '@verified-financial/schema':
         specifier: workspace:*
         version: link:../../packages/schema
@@ -74,6 +83,25 @@ importers:
         specifier: ^3.2.0
         version: 3.2.7(@types/node@22.20.1)
 
+  packages/provider-baidu:
+    dependencies:
+      '@verified-financial/provider-contract':
+        specifier: workspace:*
+        version: link:../provider-contract
+      '@verified-financial/schema':
+        specifier: workspace:*
+        version: link:../schema
+    devDependencies:
+      tsup:
+        specifier: ^8.0.0
+        version: 8.5.1(typescript@5.9.3)
+      typescript:
+        specifier: ^5.9.0
+        version: 5.9.3
+      vitest:
+        specifier: ^3.2.0
+        version: 3.2.7(@types/node@22.20.1)
+
   packages/provider-contract:
     dependencies:
       '@verified-financial/schema':
@@ -82,6 +110,47 @@ importers:
       zod:
         specifier: ^4.0.0
         version: 4.4.3
+    devDependencies:
+      tsup:
+        specifier: ^8.0.0
+        version: 8.5.1(typescript@5.9.3)
+      typescript:
+        specifier: ^5.9.0
+        version: 5.9.3
+      vitest:
+        specifier: ^3.2.0
+        version: 3.2.7(@types/node@22.20.1)
+
+  packages/provider-eastmoney:
+    dependencies:
+      '@verified-financial/provider-contract':
+        specifier: workspace:*
+        version: link:../provider-contract
+      '@verified-financial/schema':
+        specifier: workspace:*
+        version: link:../schema
+      lossless-json:
+        specifier: ^4.3.0
+        version: 4.3.0
+    devDependencies:
+      tsup:
+        specifier: ^8.0.0
+        version: 8.5.1(typescript@5.9.3)
+      typescript:
+        specifier: ^5.9.0
+        version: 5.9.3
+      vitest:
+        specifier: ^3.2.0
+        version: 3.2.7(@types/node@22.20.1)
+
+  packages/provider-tencent:
+    dependencies:
+      '@verified-financial/provider-contract':
+        specifier: workspace:*
+        version: link:../provider-contract
+      '@verified-financial/schema':
+        specifier: workspace:*
+        version: link:../schema
     devDependencies:
       tsup:
         specifier: ^8.0.0
@@ -1521,6 +1590,10 @@ packages:
     resolution: {integrity: sha512-IXO6OCs9yg8tMKzfPZ1YmheJbZCiEsnBdcB03l0OcfK9prKnJb96siuHCr5Fl37/yo9DnKU+TLpxzTUspw9shg==}
     engines: {node: ^12.20.0 || ^14.13.1 || >=16.0.0}
     dev: true
+
+  /lossless-json@4.3.0:
+    resolution: {integrity: sha512-ToxOC+SsduRmdSuoLZLYAr5zy1Qu7l5XhmPWM3zefCZ5IcrzW/h108qbJUKfOlDlhvhjUK84+8PSVX0kxnit0g==}
+    dev: false
 
   /loupe@3.2.1:
     resolution: {integrity: sha512-CdzqowRJCeLU72bHvWqwRBBlLcMEtIvGrlvef74kMnV2AolS9Y8xUv1I0U/MNAWMhBlKIoyuEgoJ0t/bbwHbLQ==}

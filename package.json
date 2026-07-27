@@ -9,6 +9,7 @@
   "scripts": {
     "build": "pnpm -r build",
     "test": "pnpm build && vitest run",
+    "test:live": "pnpm build && vitest run --config vitest.live.config.ts",
     "test:coverage": "pnpm build && vitest run --coverage",
     "test:watch": "pnpm build && vitest",
     "typecheck": "pnpm build && pnpm -r typecheck:local",

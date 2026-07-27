@@ -15,7 +15,7 @@ export function compareCompatibility(
   if (left.instrumentId !== right.instrumentId) {
     reasonCodes.push("INSTRUMENT_MISMATCH");
   }
-  if (left.unit !== right.unit || left.scale !== right.scale) {
+  if (left.unit !== right.unit) {
     reasonCodes.push("UNIT_MISMATCH");
   }
   if (

@@ -21,14 +21,18 @@ Implemented:
   deterministic FactSet assembly;
 - immutable SHA-256 raw snapshot storage and SQLite audit metadata;
 - runtime-validated Provider contract;
+- token-free Eastmoney, Tencent, and Baidu public-data Providers;
+- exact cross-source comparison across different source scales;
 - Gateway SDK orchestration and A/H instrument syntax resolution;
 - offline-safe `ah-context` JSON CLI;
 - provider-neutral fixture and Golden tests.
 
-Market and official providers are the next stage. Until they are registered,
-`facts` correctly returns a failed empty FactSet rather than inventing data.
-Tushare remains optional and the default runtime and test suite require no
-token or interface ledger.
+The local Gateway registers the three public Providers by default. Eastmoney
+supplies A/H quotes and A-share statements; Tencent and Baidu independently
+cross-check market and valuation fields. Tushare remains optional and the
+default runtime and test suite require no token or interface ledger. Official
+disclosure parsing remains the next source-layer stage and will arbitrate
+conflicts rather than creating a separate data model.
 
 ## Requirements
 
@@ -46,7 +50,11 @@ pnpm check
 pnpm test:coverage
 ```
 
-All default tests are offline.
+All default tests are offline. Public endpoint canaries are opt-in:
+
+```bash
+pnpm test:live
+```
 
 ## CLI
 
@@ -70,7 +78,8 @@ pnpm --silent ah-context facts 600519.SH \
 
 Use `VERIFIED_FINANCIAL_DATA_DIR` to select the local snapshot and SQLite
 directory. JSON results are written only to stdout; diagnostics are written
-only to stderr.
+only to stderr. Without `--offline`, `facts` may call the registered public
+endpoints and stores every upstream response as an immutable raw snapshot.
 
 The facts command accepts `--offline` and
 `--require-status verified|warning|failed`. Its exit codes are:
@@ -85,9 +94,14 @@ The facts command accepts `--offline` and
 - `@verified-financial/schema`
 - `@verified-financial/core`
 - `@verified-financial/provider-contract`
+- `@verified-financial/provider-eastmoney`
+- `@verified-financial/provider-tencent`
+- `@verified-financial/provider-baidu`
 - `@verified-financial/storage`
 - `@verified-financial/sdk`
 - `@verified-financial/ah-gateway-cli`
 
 See [the approved architecture](docs/superpowers/specs/2026-07-26-verified-financial-core-design.md)
-and [the storage/Gateway implementation plan](docs/plans/2026-07-27-storage-gateway.md).
+and the implementation plans for
+[storage/Gateway](docs/plans/2026-07-27-storage-gateway.md) and
+[public A/H Providers](docs/plans/2026-07-27-market-providers.md).

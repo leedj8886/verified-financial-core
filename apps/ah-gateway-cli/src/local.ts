@@ -1,5 +1,8 @@
 import { join } from "node:path";
+import { BaiduProvider } from "@verified-financial/provider-baidu";
 import type { SourceProvider } from "@verified-financial/provider-contract";
+import { EastmoneyProvider } from "@verified-financial/provider-eastmoney";
+import { TencentProvider } from "@verified-financial/provider-tencent";
 import { FinancialGateway } from "@verified-financial/sdk";
 import {
   ContentAddressedSnapshotStore,
@@ -11,9 +14,17 @@ export interface LocalGateway {
   close(): void;
 }
 
+export function createDefaultProviders(): SourceProvider[] {
+  return [
+    new EastmoneyProvider(),
+    new TencentProvider(),
+    new BaiduProvider(),
+  ];
+}
+
 export function createLocalGateway(
   dataDirectory: string,
-  providers: SourceProvider[] = [],
+  providers: SourceProvider[] = createDefaultProviders(),
 ): LocalGateway {
   const metadata = new MetadataStore(join(dataDirectory, "metadata.sqlite"));
   const snapshots = new ContentAddressedSnapshotStore(

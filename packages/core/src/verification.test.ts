@@ -24,6 +24,20 @@ describe("cross-source verification", () => {
     expect(result.discrepancyPercent).toBe("0.5");
   });
 
+  it("compares exact effective values across source scales", () => {
+    expect(verifyObservations([
+      makeObservation({ value: "100000000", scale: "1" }),
+      makeObservation({
+        value: "1",
+        scale: "100000000",
+        upstreamSourceId: "tencent",
+      }),
+    ])).toMatchObject({
+      status: "verified",
+      discrepancyPercent: "0",
+    });
+  });
+
   it("warns for one real upstream despite two providers", () => {
     const result = verifyObservations([
       makeObservation({

@@ -92,7 +92,6 @@ function compatibilityGroupKey(observation: Observation): string {
     instrumentId: observation.instrumentId,
     concept: observation.concept,
     unit: observation.unit,
-    scale: observation.scale,
     period: observation.period,
     basis: observation.basis,
   });

@@ -46,6 +46,19 @@ it("accepts compatible observations from different upstreams", () => {
   });
 });
 
+it("accepts equivalent units expressed with different source scales", () => {
+  const yuan = makeObservation({ value: "100000000", scale: "1" });
+  const yiYuan = makeObservation({
+    value: "1",
+    scale: "100000000",
+    upstreamSourceId: "tencent",
+  });
+  expect(compareCompatibility(yuan, yiYuan)).toEqual({
+    compatible: true,
+    reasonCodes: [],
+  });
+});
+
 it("reports every incompatible accounting and period dimension", () => {
   const left = makeObservation();
   const right = makeObservation({

@@ -1,5 +1,7 @@
 import {
   CompanySchema,
+  ConceptIdSchema,
+  DecimalStringSchema,
   FactRequirementSchema,
   InstrumentSchema,
   ObservationSchema,
@@ -22,6 +24,16 @@ export const ProviderCapabilitySchema = z.enum([
 ]);
 export type ProviderCapability = z.infer<typeof ProviderCapabilitySchema>;
 
+export const SourceFieldMappingSchema = z.object({
+  upstreamSchema: z.string().min(1),
+  rawField: z.string().min(1),
+  conceptId: ConceptIdSchema,
+  unit: z.string().min(1),
+  scale: DecimalStringSchema,
+  transformIds: z.array(z.string().min(1)),
+});
+export type SourceFieldMapping = z.infer<typeof SourceFieldMappingSchema>;
+
 export const ProviderErrorCodeSchema = z.enum([
   "TIMEOUT",
   "RATE_LIMITED",
@@ -29,6 +41,7 @@ export const ProviderErrorCodeSchema = z.enum([
   "UPSTREAM_SCHEMA_CHANGED",
   "EMPTY_RESPONSE",
   "PARSE_FAILED",
+  "UPSTREAM_UNAVAILABLE",
   "UNSUPPORTED_INSTRUMENT",
   "OFFICIAL_DOCUMENT_UNREADABLE",
 ]);
@@ -42,7 +55,7 @@ export const ProviderIssueSchema = z.object({
 });
 export type ProviderIssue = z.infer<typeof ProviderIssueSchema>;
 
-export const SnapshotMediaTypeSchema = z.enum(["json", "html", "pdf"]);
+export const SnapshotMediaTypeSchema = z.enum(["json", "text", "html", "pdf"]);
 export type SnapshotMediaType = z.infer<typeof SnapshotMediaTypeSchema>;
 
 const RawSnapshotMetadataSchema = z.object({
