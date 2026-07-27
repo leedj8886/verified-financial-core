@@ -8,6 +8,7 @@ import {
   type VerifiedFactSet,
 } from "@verified-financial/schema";
 import {
+  defaultMaxAgeSeconds,
   GatewayError,
   type FinancialGateway,
 } from "@verified-financial/sdk";
@@ -110,6 +111,7 @@ async function runFacts(
       concept: { type: "string", multiple: true },
       period: { type: "string" },
       "as-of": { type: "string" },
+      "max-age-seconds": { type: "string" },
       offline: { type: "boolean", default: false },
       "require-status": { type: "string" },
       format: { type: "string", default: "json" },
@@ -129,12 +131,18 @@ async function runFacts(
     required: true,
     ...(period === undefined ? {} : { period }),
   }));
+  const maxAgeSeconds = values["max-age-seconds"] === undefined
+    ? defaultMaxAgeSeconds(requirements)
+    : Number(values["max-age-seconds"]);
+  if (!Number.isInteger(maxAgeSeconds) || maxAgeSeconds < 0) {
+    throw new Error("--max-age-seconds must be a non-negative integer");
+  }
   const request: FactRequest = {
     instrument: positionals[0]!,
     requirements,
     asOf: normalizeAsOf(values["as-of"]),
     freshness: {
-      maxAgeSeconds: 0,
+      maxAgeSeconds,
       allowStaleOnProviderFailure: true,
       offline: values.offline,
     },

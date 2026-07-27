@@ -13,8 +13,11 @@ import {
   ContentAddressedSnapshotStore,
   MetadataStore,
 } from "@verified-financial/storage";
-import { afterEach, describe, expect, it } from "vitest";
-import { FinancialGateway } from "./gateway.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  FinancialGateway,
+  defaultMaxAgeSeconds,
+} from "./gateway.js";
 
 interface FixtureProviderOptions {
   providerId: string;
@@ -125,6 +128,7 @@ const openMetadata: MetadataStore[] = [];
 async function makeGateway(
   providers: SourceProvider[],
   providerTimeoutMs = 30_000,
+  now: () => string = () => "2026-07-27T10:00:00+08:00",
 ): Promise<{
   directory: string;
   gateway: FinancialGateway;
@@ -145,7 +149,7 @@ async function makeGateway(
       providers,
       metadata,
       snapshots,
-      now: () => "2026-07-27T10:00:00+08:00",
+      now,
       providerTimeoutMs,
     }),
   };
@@ -167,6 +171,188 @@ afterEach(async () => {
 });
 
 describe("FinancialGateway", () => {
+  it("uses shorter default freshness for market and valuation data", () => {
+    expect(defaultMaxAgeSeconds([
+      { conceptId: "income.revenue", required: true },
+    ])).toBe(86_400);
+    expect(defaultMaxAgeSeconds([
+      { conceptId: "market.cap", required: true },
+    ])).toBe(60);
+  });
+
+  it("routes requirements only to providers with matching capabilities", async () => {
+    const marketFetch = vi.fn<SourceProvider["fetch"]>();
+    const marketProvider: SourceProvider = {
+      providerId: "market-only",
+      upstreamSourceId: "market-only",
+      capabilities: ["market"],
+      fetch: marketFetch,
+    };
+    const { gateway } = await makeGateway([
+      makeProvider({ providerId: "financial" }),
+      marketProvider,
+    ]);
+    const factSet = await gateway.getFacts(request);
+    expect(factSet.facts[0]?.concept).toBe("income.revenue");
+    expect(marketFetch).not.toHaveBeenCalled();
+    expect(factSet.reasonCodes).not.toContain(
+      "PROVIDER_FAILURE:market-only:EMPTY_RESPONSE",
+    );
+  });
+
+  it("reuses a fresh cached FactSet without calling the provider", async () => {
+    const delegate = makeProvider({ providerId: "cached" });
+    const fetch = vi.fn(delegate.fetch.bind(delegate));
+    const provider: SourceProvider = { ...delegate, fetch };
+    const { gateway } = await makeGateway([provider]);
+    const cachedRequest: FactRequest = {
+      ...request,
+      freshness: {
+        maxAgeSeconds: 300,
+        allowStaleOnProviderFailure: true,
+      },
+    };
+    const first = await gateway.getFacts(cachedRequest);
+    const second = await gateway.getFacts(cachedRequest);
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(second.factSetId).toBe(first.factSetId);
+  });
+
+  it("refreshes cache age even when immutable facts keep the same ID", async () => {
+    let currentNow = "2026-07-27T10:00:00+08:00";
+    const delegate = makeProvider({ providerId: "stable" });
+    const fetch = vi.fn(delegate.fetch.bind(delegate));
+    const { gateway } = await makeGateway(
+      [{ ...delegate, fetch }],
+      30_000,
+      () => currentNow,
+    );
+    const shortCacheRequest: FactRequest = {
+      ...request,
+      freshness: {
+        maxAgeSeconds: 1,
+        allowStaleOnProviderFailure: true,
+      },
+    };
+    const first = await gateway.getFacts(shortCacheRequest);
+    currentNow = "2026-07-27T10:00:02+08:00";
+    const refreshed = await gateway.getFacts(shortCacheRequest);
+    expect(refreshed.factSetId).toBe(first.factSetId);
+    expect(fetch).toHaveBeenCalledTimes(2);
+
+    currentNow = "2026-07-27T10:00:02.500+08:00";
+    await gateway.getFacts(shortCacheRequest);
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("replays cached facts offline and marks stale snapshots", async () => {
+    let currentNow = "2026-07-27T10:00:00+08:00";
+    const delegates = [
+      makeProvider({ providerId: "alpha" }),
+      makeProvider({ providerId: "beta", value: "100.5" }),
+    ];
+    const fetches = delegates.map((delegate) =>
+      vi.fn(delegate.fetch.bind(delegate))
+    );
+    const providers = delegates.map((delegate, index): SourceProvider => ({
+      ...delegate,
+      fetch: fetches[index]!,
+    }));
+    const { gateway } = await makeGateway(
+      providers,
+      30_000,
+      () => currentNow,
+    );
+    await gateway.getFacts({
+      ...request,
+      freshness: {
+        maxAgeSeconds: 0,
+        allowStaleOnProviderFailure: true,
+      },
+    });
+    currentNow = "2026-07-27T10:00:01+08:00";
+    const replay = await gateway.getFacts({
+      ...request,
+      freshness: {
+        maxAgeSeconds: 0,
+        allowStaleOnProviderFailure: true,
+        offline: true,
+      },
+    });
+    expect(fetches.map((fetch) => fetch.mock.calls.length)).toEqual([1, 1]);
+    expect(replay.facts[0]?.status).toBe("verified");
+    expect(replay.reasonCodes).toEqual([
+      "OFFLINE_SNAPSHOT",
+      "STALE_CACHE",
+    ]);
+    expect(replay.summary.overallStatus).toBe("warning");
+    expect(await gateway.getFactSet(replay.factSetId)).toEqual(replay);
+  });
+
+  it("fails closed on an offline cache miss without invoking providers", async () => {
+    const delegate = makeProvider({ providerId: "unused" });
+    const fetch = vi.fn(delegate.fetch.bind(delegate));
+    const { gateway } = await makeGateway([{ ...delegate, fetch }]);
+    const factSet = await gateway.getFacts({
+      ...request,
+      freshness: {
+        maxAgeSeconds: 0,
+        allowStaleOnProviderFailure: true,
+        offline: true,
+      },
+    });
+    expect(fetch).not.toHaveBeenCalled();
+    expect(factSet.facts).toEqual([]);
+    expect(factSet.reasonCodes).toEqual([
+      "EMPTY_FACT_SET",
+      "OFFLINE_SNAPSHOT",
+    ]);
+  });
+
+  it("falls back to stale cache only when live providers cannot satisfy the request", async () => {
+    let currentNow = "2026-07-27T10:00:00+08:00";
+    const alphaOptions: FixtureProviderOptions = { providerId: "alpha" };
+    const betaOptions: FixtureProviderOptions = {
+      providerId: "beta",
+      value: "100.5",
+    };
+    const { gateway } = await makeGateway(
+      [makeProvider(alphaOptions), makeProvider(betaOptions)],
+      30_000,
+      () => currentNow,
+    );
+    const fallbackRequest: FactRequest = {
+      ...request,
+      freshness: {
+        maxAgeSeconds: 1,
+        allowStaleOnProviderFailure: true,
+      },
+    };
+    await gateway.getFacts(fallbackRequest);
+    alphaOptions.fail = true;
+    betaOptions.fail = true;
+    currentNow = "2026-07-27T10:00:10+08:00";
+    const fallback = await gateway.getFacts(fallbackRequest);
+    expect(fallback.facts[0]?.status).toBe("verified");
+    expect(fallback.reasonCodes).toEqual([
+      "PROVIDER_FAILURE:alpha:TIMEOUT",
+      "PROVIDER_FAILURE:beta:TIMEOUT",
+      "STALE_CACHE",
+    ]);
+    expect(fallback.summary.overallStatus).toBe("warning");
+
+    const noFallback = await gateway.getFacts({
+      ...fallbackRequest,
+      freshness: {
+        maxAgeSeconds: 1,
+        allowStaleOnProviderFailure: false,
+      },
+    });
+    expect(noFallback.facts).toEqual([]);
+    expect(noFallback.summary.overallStatus).toBe("failed");
+    expect(noFallback.reasonCodes).not.toContain("STALE_CACHE");
+  });
+
   it("verifies independent providers and persists full explanation lineage", async () => {
     const { directory, gateway, metadata } = await makeGateway([
       makeProvider({ providerId: "alpha", value: "100" }),

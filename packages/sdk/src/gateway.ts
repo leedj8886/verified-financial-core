@@ -1,6 +1,7 @@
 import {
   buildFactSet,
   canonicalJson,
+  stableId,
   verifyAndMaterializeFact,
 } from "@verified-financial/core";
 import {
@@ -8,6 +9,7 @@ import {
   ProviderRequestSchema,
   parseProviderBatch,
   type ProviderBatch,
+  type ProviderCapability,
   type ProviderIssue,
   type SourceProvider,
 } from "@verified-financial/provider-contract";
@@ -15,12 +17,14 @@ import {
   FactRequestSchema,
   isAvailableAsOf,
   type Company,
+  type FactRequirement,
   type FactRequest,
   type Instrument,
   type Observation,
   type VerifiedFactSet,
 } from "@verified-financial/schema";
 import {
+  type CachedFactSet,
   type ContentAddressedSnapshotStore,
   type FactExplanation,
   type MetadataStore,
@@ -64,12 +68,89 @@ interface ProviderOutcome {
   issues: ProviderIssue[];
 }
 
+interface NormalizedFreshness {
+  maxAgeSeconds: number;
+  allowStaleOnProviderFailure: boolean;
+  offline: boolean;
+}
+
+interface AssembledFactSet {
+  factSet: VerifiedFactSet;
+  observations: Observation[];
+  mappingVersions: string[];
+}
+
 function providerReason(issue: ProviderIssue): string {
   return `PROVIDER_FAILURE:${issue.providerId}:${issue.code}`;
 }
 
 function unavailableReason(observation: Observation): string {
   return `NOT_AVAILABLE_AS_OF:${observation.provenance.providerId}`;
+}
+
+function capabilityForRequirement(
+  requirement: FactRequirement,
+): ProviderCapability {
+  const concept = requirement.conceptId;
+  if (concept.startsWith("market.")) return "market";
+  if (concept.startsWith("valuation.")) return "valuation";
+  if (concept.startsWith("distribution.")) return "dividends";
+  return "financials";
+}
+
+function requirementsForProvider(
+  provider: SourceProvider,
+  requirements: readonly FactRequirement[],
+): FactRequirement[] {
+  const capabilities = new Set(provider.capabilities);
+  return requirements.filter((requirement) =>
+    capabilities.has(capabilityForRequirement(requirement))
+  );
+}
+
+export function defaultMaxAgeSeconds(
+  requirements: readonly FactRequirement[],
+): number {
+  return requirements.some((requirement) => {
+      const capability = capabilityForRequirement(requirement);
+      return capability === "market" || capability === "valuation";
+    })
+    ? 60
+    : 86_400;
+}
+
+function normalizeFreshness(request: FactRequest): NormalizedFreshness {
+  return {
+    maxAgeSeconds: request.freshness?.maxAgeSeconds
+      ?? defaultMaxAgeSeconds(request.requirements),
+    allowStaleOnProviderFailure:
+      request.freshness?.allowStaleOnProviderFailure ?? true,
+    offline: request.freshness?.offline ?? false,
+  };
+}
+
+function cacheAgeSeconds(cached: CachedFactSet, now: string): number {
+  return Math.max(
+    0,
+    (Date.parse(now) - Date.parse(cached.cachedAt)) / 1000,
+  );
+}
+
+function requestCacheKey(
+  resolution: InstrumentResolution,
+  request: FactRequest,
+  schemaVersion: string,
+  validationRulesVersion: string,
+): string {
+  return stableId("request", {
+    schemaVersion,
+    validationRulesVersion,
+    instrumentId: resolution.instrument.instrumentId,
+    requirements: [...request.requirements].sort((left, right) =>
+      canonicalJson(left).localeCompare(canonicalJson(right))
+    ),
+    asOf: request.asOf,
+  });
 }
 
 function matchesRequest(
@@ -222,7 +303,11 @@ export class FinancialGateway {
       ]);
       const batch = parseProviderBatch(provider, value);
       const issues = [...batch.issues];
-      if (batch.observations.length === 0 && batch.unmapped.length === 0) {
+      if (
+        batch.observations.length === 0
+        && batch.unmapped.length === 0
+        && issues.length === 0
+      ) {
         issues.push({
           providerId: provider.providerId,
           code: "EMPTY_RESPONSE",
@@ -255,28 +340,13 @@ export class FinancialGateway {
     }
   }
 
-  async getFacts(input: FactRequest): Promise<VerifiedFactSet> {
-    let request: FactRequest;
-    try {
-      request = FactRequestSchema.parse(input);
-    } catch (error) {
-      throw new GatewayError("INVALID_INPUT", "Invalid FactRequest", {
-        cause: error,
-      });
-    }
-    const resolution = await this.resolveInstrument(request.instrument);
-    const startedAt = this.now();
-    const providerRequest = ProviderRequestSchema.parse({
-      instrument: resolution.instrument,
-      requirements: request.requirements,
-      asOf: request.asOf,
-      offline: request.freshness?.offline ?? false,
-    });
-    const outcomes = await Promise.all(
-      this.providers.map((provider) =>
-        this.fetchProvider(provider, providerRequest, startedAt)
-      ),
-    );
+  private assembleFactSet(
+    request: FactRequest,
+    resolution: InstrumentResolution,
+    startedAt: string,
+    outcomes: readonly ProviderOutcome[],
+    extraReasonCodes: readonly string[] = [],
+  ): AssembledFactSet {
     const batches = outcomes.flatMap((outcome) =>
       outcome.batch === undefined ? [] : [outcome.batch]
     );
@@ -327,39 +397,52 @@ export class FinancialGateway {
       ...unavailableReasons,
       ...instrumentScopeReasons,
       ...companyConflictReasons,
-      ...(providerRequest.offline ? ["OFFLINE_SNAPSHOT"] : []),
+      ...extraReasonCodes,
     ];
     const mappingVersions = batches.flatMap(
       (batch) => batch.mappingVersions,
     );
-    const factSet = buildFactSet({
-      schemaVersion: this.schemaVersion,
-      request,
-      generatedAt: startedAt,
-      company,
-      instruments: mergeInstruments(resolution, sameCompanyBatches, company),
-      facts: facts.filter((fact) => fact.companyId === company.companyId),
-      unmapped: sameCompanyBatches.flatMap((batch) => batch.unmapped),
-      validations: validations.filter((validation) =>
-        facts.some((fact) =>
-          fact.companyId === company.companyId
-          && fact.verification.verificationId === validation.verificationId
-        )
-      ),
-      rawSnapshotIds: sameCompanyBatches.flatMap((batch) =>
-        batch.rawSnapshots.map((snapshot) => snapshot.snapshotId)
-      ),
-      mappingVersions,
-      validationRulesVersion: this.validationRulesVersion,
-      reasonCodes,
-    });
-    try {
-      this.metadata.putFactSet(
-        factSet,
-        eligibleObservations.filter(
-          (observation) => observation.companyId === company.companyId,
+    const observations = eligibleObservations.filter(
+      (observation) => observation.companyId === company.companyId,
+    );
+    return {
+      factSet: buildFactSet({
+        schemaVersion: this.schemaVersion,
+        request,
+        generatedAt: startedAt,
+        company,
+        instruments: mergeInstruments(resolution, sameCompanyBatches, company),
+        facts: facts.filter((fact) => fact.companyId === company.companyId),
+        unmapped: sameCompanyBatches.flatMap((batch) => batch.unmapped),
+        validations: validations.filter((validation) =>
+          facts.some((fact) =>
+            fact.companyId === company.companyId
+            && fact.verification.verificationId
+              === validation.verificationId
+          )
+        ),
+        rawSnapshotIds: sameCompanyBatches.flatMap((batch) =>
+          batch.rawSnapshots.map((snapshot) => snapshot.snapshotId)
         ),
         mappingVersions,
+        validationRulesVersion: this.validationRulesVersion,
+        reasonCodes,
+      }),
+      observations,
+      mappingVersions,
+    };
+  }
+
+  private persistFactSet(
+    assembled: AssembledFactSet,
+    cacheKey?: string,
+  ): void {
+    try {
+      this.metadata.putFactSet(
+        assembled.factSet,
+        assembled.observations,
+        assembled.mappingVersions,
+        cacheKey,
       );
     } catch (error) {
       throw new GatewayError(
@@ -368,7 +451,148 @@ export class FinancialGateway {
         { cause: error },
       );
     }
+  }
+
+  private readCachedFactSet(cacheKey: string): CachedFactSet | undefined {
+    try {
+      return this.metadata.getLatestCachedFactSet(cacheKey);
+    } catch (error) {
+      throw new GatewayError(
+        "STORAGE_ERROR",
+        "Failed to read cached FactSet",
+        { cause: error },
+      );
+    }
+  }
+
+  private replayCachedFactSet(
+    cached: CachedFactSet,
+    request: FactRequest,
+    additionalReasonCodes: readonly string[],
+  ): VerifiedFactSet {
+    const factSet = buildFactSet({
+      schemaVersion: this.schemaVersion,
+      request,
+      generatedAt: cached.factSet.generatedAt,
+      company: cached.factSet.company,
+      instruments: cached.factSet.instruments,
+      facts: cached.factSet.facts,
+      unmapped: cached.factSet.unmapped,
+      validations: cached.factSet.validations,
+      rawSnapshotIds: cached.factSet.rawSnapshotIds,
+      mappingVersions: cached.mappingVersions,
+      validationRulesVersion: this.validationRulesVersion,
+      reasonCodes: [
+        ...cached.factSet.reasonCodes,
+        ...additionalReasonCodes,
+      ],
+    });
+    this.persistFactSet({
+      factSet,
+      observations: cached.observations,
+      mappingVersions: cached.mappingVersions,
+    });
     return factSet;
+  }
+
+  async getFacts(input: FactRequest): Promise<VerifiedFactSet> {
+    let request: FactRequest;
+    try {
+      request = FactRequestSchema.parse(input);
+    } catch (error) {
+      throw new GatewayError("INVALID_INPUT", "Invalid FactRequest", {
+        cause: error,
+      });
+    }
+    const resolution = await this.resolveInstrument(request.instrument);
+    const startedAt = this.now();
+    const freshness = normalizeFreshness(request);
+    const cacheKey = requestCacheKey(
+      resolution,
+      request,
+      this.schemaVersion,
+      this.validationRulesVersion,
+    );
+    const cached = this.readCachedFactSet(cacheKey);
+    const cachedAge = cached === undefined
+      ? undefined
+      : cacheAgeSeconds(cached, startedAt);
+
+    if (freshness.offline && cached !== undefined) {
+      return this.replayCachedFactSet(cached, request, [
+        "OFFLINE_SNAPSHOT",
+        ...(cachedAge! > freshness.maxAgeSeconds ? ["STALE_CACHE"] : []),
+      ]);
+    }
+    if (
+      !freshness.offline
+      && cached !== undefined
+      && cachedAge! <= freshness.maxAgeSeconds
+    ) {
+      return this.replayCachedFactSet(cached, request, []);
+    }
+
+    const providerPlans = this.providers.flatMap((provider) => {
+      const requirements = requirementsForProvider(
+        provider,
+        request.requirements,
+      );
+      return requirements.length === 0 ? [] : [{ provider, requirements }];
+    });
+    const unsupportedReasons = request.requirements
+      .filter((requirement) =>
+        !providerPlans.some(({ requirements }) =>
+          requirements.includes(requirement)
+        )
+      )
+      .map((requirement) =>
+        `NO_CAPABLE_PROVIDER:${requirement.conceptId}`
+      );
+    const outcomes = freshness.offline
+      ? []
+      : await Promise.all(providerPlans.map(({ provider, requirements }) => {
+          const providerRequest = ProviderRequestSchema.parse({
+            instrument: resolution.instrument,
+            requirements,
+            asOf: request.asOf,
+            offline: false,
+          });
+          return this.fetchProvider(provider, providerRequest, startedAt);
+        }));
+    const assembled = this.assembleFactSet(
+      request,
+      resolution,
+      startedAt,
+      outcomes,
+      [
+        ...unsupportedReasons,
+        ...(freshness.offline ? ["OFFLINE_SNAPSHOT"] : []),
+      ],
+    );
+    this.persistFactSet(
+      assembled,
+      assembled.factSet.summary.overallStatus === "failed"
+        ? undefined
+        : cacheKey,
+    );
+
+    const hasProviderFailure = outcomes.some(
+      (outcome) => outcome.issues.length > 0,
+    );
+    if (
+      assembled.factSet.summary.overallStatus === "failed"
+      && hasProviderFailure
+      && freshness.allowStaleOnProviderFailure
+      && cached !== undefined
+    ) {
+      return this.replayCachedFactSet(cached, request, [
+        "STALE_CACHE",
+        ...assembled.factSet.reasonCodes.filter(
+          (reasonCode) => reasonCode !== "EMPTY_FACT_SET",
+        ),
+      ]);
+    }
+    return assembled.factSet;
   }
 
   async getFactSet(factSetId: string): Promise<VerifiedFactSet> {

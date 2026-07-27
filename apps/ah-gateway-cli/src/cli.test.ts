@@ -49,6 +49,8 @@ function makeGateway(
         databasePath: "/tmp/fixture.sqlite",
         factSetCount: 0,
         snapshotCount: 0,
+        cacheEntryCount: 0,
+        providerRequestCount: 0,
       },
     })),
   };
@@ -123,6 +125,7 @@ describe("ah-context JSON CLI", () => {
     expect(output.stderr).toEqual([]);
     expect(gateway.getFacts).toHaveBeenCalledWith(expect.objectContaining({
       asOf: "2026-07-27T23:59:59+08:00",
+      freshness: expect.objectContaining({ maxAgeSeconds: 86_400 }),
     }));
   });
 
@@ -132,6 +135,24 @@ describe("ah-context JSON CLI", () => {
       .toBe(3);
     expect(output.stdout).toEqual([]);
     expect(JSON.parse(output.stderr[0]!).error.code).toBe("INVALID_INPUT");
+  });
+
+  it("rejects an invalid cache age before invoking the Gateway", async () => {
+    const output = captureIo();
+    const gateway = makeGateway();
+    expect(await runCli([
+      "facts",
+      "600519.SH",
+      "--concept",
+      "market.cap",
+      "--as-of",
+      "2026-07-27",
+      "--max-age-seconds",
+      "-1",
+    ], gateway, output.io)).toBe(3);
+    expect(gateway.getFacts).not.toHaveBeenCalled();
+    expect(JSON.parse(output.stderr[0]!).error.message)
+      .toContain("--max-age-seconds");
   });
 
   it("reports local provider and storage health", async () => {

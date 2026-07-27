@@ -37,6 +37,8 @@ sdk -> ah-gateway-cli
       persistence, retrieval, and fact explanation.
 - [x] Add `ah-context` JSON CLI with `resolve`, `facts`, `fact-set`, `explain`,
       and `doctor`; stdout remains JSON-only.
+- [x] Add capability-aware routing, request-level FactSet caching, offline
+      replay, and stale fallback with explicit reason codes.
 - [x] Verify all default tests are offline, Node 24 typecheck/build passes, and
       no Tushare token or interface ledger is required.
 

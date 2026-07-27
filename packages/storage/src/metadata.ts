@@ -17,6 +17,10 @@ interface FactSetRow {
   fact_set_json: string;
 }
 
+interface CachedFactSetRow extends FactSetRow {
+  cached_at: string;
+}
+
 interface ExplanationRow {
   fact_set_id: string;
   fact_set_json: string;
@@ -24,6 +28,17 @@ interface ExplanationRow {
 
 interface ObservationRow {
   observation_json: string;
+}
+
+interface MappingVersionRow {
+  mapping_version: string;
+}
+
+export interface CachedFactSet {
+  factSet: VerifiedFactSet;
+  cachedAt: string;
+  observations: Observation[];
+  mappingVersions: string[];
 }
 
 export interface FactExplanation {
@@ -104,6 +119,14 @@ export class MetadataStore {
         mapping_version TEXT NOT NULL,
         PRIMARY KEY (fact_set_id, mapping_version)
       );
+      CREATE TABLE IF NOT EXISTS fact_set_cache (
+        cache_key TEXT NOT NULL,
+        fact_set_id TEXT NOT NULL,
+        generated_at TEXT NOT NULL,
+        PRIMARY KEY (cache_key, fact_set_id)
+      );
+      CREATE INDEX IF NOT EXISTS fact_set_cache_latest
+      ON fact_set_cache (cache_key, generated_at DESC, fact_set_id DESC);
     `);
   }
 
@@ -154,6 +177,7 @@ export class MetadataStore {
     factSet: VerifiedFactSet,
     observations: readonly Observation[],
     mappingVersions: readonly string[],
+    cacheKey?: string,
   ): void {
     const parsed = VerifiedFactSetSchema.parse(factSet);
     const parsedObservations = ObservationSchema.array().parse(observations);
@@ -223,6 +247,13 @@ export class MetadataStore {
       for (const mappingVersion of new Set(mappingVersions)) {
         putMappingVersion.run(parsed.factSetId, mappingVersion);
       }
+      if (cacheKey !== undefined) {
+        this.database.prepare(`
+          INSERT OR REPLACE INTO fact_set_cache (
+            cache_key, fact_set_id, generated_at
+          ) VALUES (?, ?, ?)
+        `).run(cacheKey, parsed.factSetId, parsed.generatedAt);
+      }
     });
     transaction();
   }
@@ -236,6 +267,43 @@ export class MetadataStore {
     return row === undefined
       ? undefined
       : VerifiedFactSetSchema.parse(JSON.parse(row.fact_set_json));
+  }
+
+  getLatestCachedFactSet(cacheKey: string): CachedFactSet | undefined {
+    const row = this.database.prepare(`
+      SELECT fs.fact_set_json, cache.generated_at AS cached_at
+      FROM fact_set_cache cache
+      JOIN fact_sets fs ON fs.fact_set_id = cache.fact_set_id
+      WHERE cache.cache_key = ?
+      ORDER BY cache.generated_at DESC, cache.fact_set_id DESC
+      LIMIT 1
+    `).get(cacheKey) as CachedFactSetRow | undefined;
+    if (row === undefined) return undefined;
+    const factSet = VerifiedFactSetSchema.parse(JSON.parse(row.fact_set_json));
+    const observationRows = this.database.prepare(`
+      SELECT DISTINCT o.observation_json
+      FROM fact_set_facts fsf
+      JOIN fact_observations fo ON fo.fact_id = fsf.fact_id
+      JOIN observations o ON o.observation_id = fo.observation_id
+      WHERE fsf.fact_set_id = ?
+      ORDER BY o.observation_id
+    `).all(factSet.factSetId) as ObservationRow[];
+    const mappingRows = this.database.prepare(`
+      SELECT mapping_version
+      FROM mapping_versions
+      WHERE fact_set_id = ?
+      ORDER BY mapping_version
+    `).all(factSet.factSetId) as MappingVersionRow[];
+    return {
+      factSet,
+      cachedAt: row.cached_at,
+      observations: observationRows.map((observationRow) =>
+        ObservationSchema.parse(JSON.parse(observationRow.observation_json))
+      ),
+      mappingVersions: mappingRows.map((mappingRow) =>
+        mappingRow.mapping_version
+      ),
+    };
   }
 
   explainFact(factId: string): FactExplanation | undefined {
@@ -278,6 +346,8 @@ export class MetadataStore {
     databasePath: string;
     factSetCount: number;
     snapshotCount: number;
+    cacheEntryCount: number;
+    providerRequestCount: number;
   } {
     const factSetCount = this.database.prepare(
       "SELECT COUNT(*) AS count FROM fact_sets",
@@ -285,10 +355,18 @@ export class MetadataStore {
     const snapshotCount = this.database.prepare(
       "SELECT COUNT(*) AS count FROM snapshots",
     ).get() as { count: number };
+    const cacheEntryCount = this.database.prepare(
+      "SELECT COUNT(*) AS count FROM fact_set_cache",
+    ).get() as { count: number };
+    const providerRequestCount = this.database.prepare(
+      "SELECT COUNT(*) AS count FROM provider_requests",
+    ).get() as { count: number };
     return {
       databasePath: this.databasePath,
       factSetCount: factSetCount.count,
       snapshotCount: snapshotCount.count,
+      cacheEntryCount: cacheEntryCount.count,
+      providerRequestCount: providerRequestCount.count,
     };
   }
 
