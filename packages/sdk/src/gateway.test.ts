@@ -311,6 +311,56 @@ describe("FinancialGateway", () => {
     );
   });
 
+  it("prefers company metadata from a provider that supplied observations", async () => {
+    const emptyProvider: SourceProvider = {
+      providerId: "empty-financial",
+      upstreamSourceId: "empty-financial",
+      capabilities: ["financials"],
+      async fetch(providerRequest) {
+        return {
+          providerId: "empty-financial",
+          upstreamSourceId: "empty-financial",
+          company: {
+            companyId: providerRequest.instrument.companyId,
+            legalName: providerRequest.instrument.instrumentId,
+            jurisdiction: "CN",
+          },
+          instruments: [providerRequest.instrument],
+          observations: [],
+          unmapped: [],
+          rawSnapshots: [],
+          mappingVersions: ["empty-financial@1"],
+          issues: [],
+        };
+      },
+    };
+    const fixtureProvider = makeProvider({ providerId: "hk-official" });
+    const hkProvider: SourceProvider = {
+      ...fixtureProvider,
+      async fetch(providerRequest, context) {
+        const batch = await fixtureProvider.fetch(providerRequest, context);
+        return {
+          ...batch,
+          company: {
+            companyId: providerRequest.instrument.companyId,
+            legalName: "TENCENT",
+            jurisdiction: "HK",
+          },
+        };
+      },
+    };
+    const { gateway } = await makeGateway([emptyProvider, hkProvider]);
+    const factSet = await gateway.getFacts({
+      ...request,
+      instrument: "0700.HK",
+    });
+    expect(factSet.company).toEqual({
+      companyId: "company:XHKG:00700",
+      legalName: "TENCENT",
+      jurisdiction: "HK",
+    });
+  });
+
   it("derives free cash flow from expanded dependencies and preserves lineage", async () => {
     const basis: AccountingBasis = {
       standard: "CAS",

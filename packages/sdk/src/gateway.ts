@@ -40,7 +40,7 @@ import {
 } from "./derivation-orchestrator.js";
 
 const DEFAULT_SCHEMA_VERSION = "1.0.0";
-const DEFAULT_VALIDATION_RULES_VERSION = "1.2.0";
+const DEFAULT_VALIDATION_RULES_VERSION = "1.3.0";
 
 export class GatewayError extends Error {
   readonly code: "NOT_FOUND" | "INVALID_INPUT" | "STORAGE_ERROR";
@@ -215,12 +215,29 @@ function chooseCompany(
   batches: readonly ProviderBatch[],
 ): Company {
   const matching = batches
-    .map((batch) => batch.company)
-    .filter((company) =>
-      batches.every((batch) => batch.company.companyId === company.companyId)
-    )
-    .sort((left, right) => canonicalJson(left).localeCompare(canonicalJson(right)));
-  return matching[0] ?? resolution.company;
+    .filter((batch) => batch.company.companyId === resolution.company.companyId)
+    .sort((left, right) => {
+      const observationDifference =
+        Number(right.observations.length > 0)
+        - Number(left.observations.length > 0);
+      if (observationDifference !== 0) return observationDifference;
+      const resolvedNameDifference =
+        Number(
+          right.company.legalName !== right.instruments[0]?.instrumentId,
+        )
+        - Number(
+          left.company.legalName !== left.instruments[0]?.instrumentId,
+        );
+      if (resolvedNameDifference !== 0) return resolvedNameDifference;
+      const jurisdictionDifference =
+        Number(right.company.jurisdiction === resolution.company.jurisdiction)
+        - Number(left.company.jurisdiction === resolution.company.jurisdiction);
+      if (jurisdictionDifference !== 0) return jurisdictionDifference;
+      return canonicalJson(left.company).localeCompare(
+        canonicalJson(right.company),
+      );
+    });
+  return matching[0]?.company ?? resolution.company;
 }
 
 function normalizeThrownIssue(

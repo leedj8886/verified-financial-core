@@ -21,7 +21,8 @@ Implemented:
   deterministic FactSet assembly;
 - immutable SHA-256 raw snapshot storage and SQLite audit metadata;
 - runtime-validated Provider contract;
-- token-free CNINFO official-filing, Eastmoney, Tencent, and Baidu Providers;
+- token-free CNINFO/HKEX official-filing, Eastmoney, Tencent, and Baidu
+  Providers;
 - exact cross-source comparison across different source scales;
 - capability-aware Provider routing and request-level FactSet caching;
 - automatic, traceable FCF, explicit-quarter TTM-flow, and market-cap
@@ -31,15 +32,17 @@ Implemented:
 - offline-safe `ah-context` JSON CLI;
 - provider-neutral fixture and Golden tests.
 
-The local Gateway registers four token-free Providers by default. CNINFO
-resolves A-share issuers, discovers periodic filings, snapshots the official
-PDF, and extracts a constrained set of consolidated financial facts.
-Eastmoney supplies A/H quotes and A-share statements; Tencent and Baidu
-independently cross-check market and valuation fields. Official CNINFO facts
-adjudicate compatible A-share conflicts through the same verification core.
+The local Gateway registers five token-free Providers by default. CNINFO
+resolves A-share issuers and HKEX resolves H-share issuers; both discover
+periodic filings, snapshot the official PDF, and extract a constrained set of
+consolidated financial facts. Eastmoney supplies A/H quotes and A-share
+statements; Tencent and Baidu independently cross-check market and valuation
+fields. Official facts adjudicate compatible conflicts through the same
+verification core. HKEX preserves the statement currency and reported scale
+and uses the exchange's exact release minute for historical `asOf` filtering.
+H-share statements remain `warning` when HKEX is the only independent source.
 Tushare remains optional and the default runtime and test suite require no
-token or interface ledger. HKEX filing extraction remains the next
-source-layer stage.
+token or interface ledger.
 
 ## Requirements
 
@@ -125,6 +128,7 @@ other non-additive ratios are intentionally not inferred.
 - `@verified-financial/core`
 - `@verified-financial/provider-contract`
 - `@verified-financial/provider-cninfo`
+- `@verified-financial/provider-hkex`
 - `@verified-financial/provider-eastmoney`
 - `@verified-financial/provider-tencent`
 - `@verified-financial/provider-baidu`
@@ -137,5 +141,6 @@ and the implementation plans for
 [storage/Gateway](docs/plans/2026-07-27-storage-gateway.md),
 [routing/cache](docs/plans/2026-07-27-gateway-cache-routing.md),
 [derivation orchestration](docs/plans/2026-07-28-gateway-derivations.md),
-[CNINFO official filings](docs/plans/2026-07-28-cninfo-provider.md), and
+[CNINFO official filings](docs/plans/2026-07-28-cninfo-provider.md),
+[HKEX official filings](docs/plans/2026-07-28-hkex-provider.md), and
 [public A/H Providers](docs/plans/2026-07-27-market-providers.md).

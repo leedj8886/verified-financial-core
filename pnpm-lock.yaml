@@ -41,6 +41,9 @@ importers:
       '@verified-financial/provider-eastmoney':
         specifier: workspace:*
         version: link:../../packages/provider-eastmoney
+      '@verified-financial/provider-hkex':
+        specifier: workspace:*
+        version: link:../../packages/provider-hkex
       '@verified-financial/provider-tencent':
         specifier: workspace:*
         version: link:../../packages/provider-tencent
@@ -158,6 +161,34 @@ importers:
         specifier: ^4.3.0
         version: 4.3.0
     devDependencies:
+      tsup:
+        specifier: ^8.0.0
+        version: 8.5.1(typescript@5.9.3)
+      typescript:
+        specifier: ^5.9.0
+        version: 5.9.3
+      vitest:
+        specifier: ^3.2.0
+        version: 3.2.7(@types/node@22.20.1)
+
+  packages/provider-hkex:
+    dependencies:
+      '@verified-financial/provider-contract':
+        specifier: workspace:*
+        version: link:../provider-contract
+      '@verified-financial/schema':
+        specifier: workspace:*
+        version: link:../schema
+      decimal.js:
+        specifier: ^10.6.0
+        version: 10.6.0
+      unpdf:
+        specifier: ^1.8.0
+        version: 1.8.0
+    devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.20.1
       tsup:
         specifier: ^8.0.0
         version: 8.5.1(typescript@5.9.3)

@@ -8,6 +8,7 @@ import {
   type SourceProvider,
 } from "../../packages/provider-contract/src/index.js";
 import { EastmoneyProvider } from "../../packages/provider-eastmoney/src/index.js";
+import { HkexProvider } from "../../packages/provider-hkex/src/index.js";
 import { TencentProvider } from "../../packages/provider-tencent/src/index.js";
 import { describe, expect, it } from "vitest";
 
@@ -114,5 +115,40 @@ describe("public A/H provider live canaries", () => {
     ]);
     expect(batch.rawSnapshots.map((snapshot) => snapshot.mediaType))
       .toEqual(["json", "json", "pdf"]);
+  });
+
+  it("HKEX returns a fact extracted from an official annual filing", async () => {
+    const provider = new HkexProvider();
+    const batch = await fetchLive(provider, {
+      instrument: {
+        instrumentId: "XHKG:00700",
+        companyId: "company:XHKG:00700",
+        exchangeMic: "XHKG",
+        symbol: "00700",
+        shareClass: "H",
+        tradingCurrency: "HKD",
+      },
+      requirements: [{
+        conceptId: "income.revenue",
+        required: true,
+        period: { fiscalYear: 2025, presentation: "annual" },
+      }],
+      asOf: new Date().toISOString(),
+      offline: false,
+    });
+    expect(batch.issues).toEqual([]);
+    expect(batch.observations).toEqual([
+      expect.objectContaining({
+        concept: "income.revenue",
+        unit: "CNY",
+        scale: "1000000",
+        provenance: expect.objectContaining({
+          sourceType: "official",
+          extractionMethod: "pdf",
+        }),
+      }),
+    ]);
+    expect(batch.rawSnapshots.map((snapshot) => snapshot.mediaType))
+      .toEqual(["text", "json", "pdf"]);
   });
 });

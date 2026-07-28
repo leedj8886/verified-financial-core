@@ -17,6 +17,7 @@
     "@verified-financial/provider-cninfo": "workspace:*",
     "@verified-financial/provider-contract": "workspace:*",
     "@verified-financial/provider-eastmoney": "workspace:*",
+    "@verified-financial/provider-hkex": "workspace:*",
     "@verified-financial/provider-tencent": "workspace:*",
     "@verified-financial/schema": "workspace:*",
     "@verified-financial/sdk": "workspace:*",

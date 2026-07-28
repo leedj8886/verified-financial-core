@@ -3,6 +3,7 @@ import { BaiduProvider } from "@verified-financial/provider-baidu";
 import { CninfoProvider } from "@verified-financial/provider-cninfo";
 import type { SourceProvider } from "@verified-financial/provider-contract";
 import { EastmoneyProvider } from "@verified-financial/provider-eastmoney";
+import { HkexProvider } from "@verified-financial/provider-hkex";
 import { TencentProvider } from "@verified-financial/provider-tencent";
 import { FinancialGateway } from "@verified-financial/sdk";
 import {
@@ -19,6 +20,7 @@ export function createDefaultProviders(): SourceProvider[] {
   return [
     new EastmoneyProvider(),
     new CninfoProvider(),
+    new HkexProvider(),
     new TencentProvider(),
     new BaiduProvider(),
   ];

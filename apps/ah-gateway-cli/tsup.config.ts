@@ -11,6 +11,7 @@ export default defineConfig({
     "@verified-financial/provider-cninfo",
     "@verified-financial/provider-contract",
     "@verified-financial/provider-eastmoney",
+    "@verified-financial/provider-hkex",
     "@verified-financial/provider-tencent",
     "@verified-financial/schema",
     "@verified-financial/sdk",
