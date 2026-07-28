@@ -8,6 +8,7 @@ export default defineConfig({
   clean: true,
   external: [
     "@verified-financial/provider-baidu",
+    "@verified-financial/provider-cninfo",
     "@verified-financial/provider-contract",
     "@verified-financial/provider-eastmoney",
     "@verified-financial/provider-tencent",

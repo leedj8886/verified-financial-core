@@ -3,6 +3,25 @@ import { ProviderFailure } from "./contract.js";
 import { fetchBytes, type FetchImplementation } from "./http.js";
 
 describe("provider HTTP policy", () => {
+  it("passes form bodies through for POST-only upstream APIs", async () => {
+    const fetchImplementation = vi.fn<FetchImplementation>(
+      async (_input, init) => {
+        expect(init?.method).toBe("POST");
+        expect(String(init?.body)).toBe("stock=600519");
+        return new Response("ok");
+      },
+    );
+    await fetchBytes("https://example.invalid/query", {
+      providerId: "fixture",
+      signal: new AbortController().signal,
+      fetchImplementation,
+      method: "POST",
+      body: new URLSearchParams({ stock: "600519" }),
+      retries: 0,
+    });
+    expect(fetchImplementation).toHaveBeenCalledTimes(1);
+  });
+
   it("retries a transient upstream failure", async () => {
     const fetchImplementation = vi.fn<FetchImplementation>()
       .mockResolvedValueOnce(new Response("unavailable", { status: 503 }))

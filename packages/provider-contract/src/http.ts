@@ -9,7 +9,9 @@ export interface FetchBytesOptions {
   providerId: string;
   signal: AbortSignal;
   fetchImplementation?: FetchImplementation;
+  body?: BodyInit;
   headers?: HeadersInit;
+  method?: "GET" | "POST";
   retries?: number;
   timeoutMs?: number;
 }
@@ -64,7 +66,9 @@ export async function fetchBytes(
     const signal = AbortSignal.any([options.signal, timeoutSignal]);
     try {
       const response = await fetchImplementation(url, {
+        ...(options.body === undefined ? {} : { body: options.body }),
         ...(options.headers === undefined ? {} : { headers: options.headers }),
+        method: options.method ?? "GET",
         redirect: "follow",
         signal,
       });

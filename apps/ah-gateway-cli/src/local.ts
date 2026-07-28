@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import { BaiduProvider } from "@verified-financial/provider-baidu";
+import { CninfoProvider } from "@verified-financial/provider-cninfo";
 import type { SourceProvider } from "@verified-financial/provider-contract";
 import { EastmoneyProvider } from "@verified-financial/provider-eastmoney";
 import { TencentProvider } from "@verified-financial/provider-tencent";
@@ -17,6 +18,7 @@ export interface LocalGateway {
 export function createDefaultProviders(): SourceProvider[] {
   return [
     new EastmoneyProvider(),
+    new CninfoProvider(),
     new TencentProvider(),
     new BaiduProvider(),
   ];

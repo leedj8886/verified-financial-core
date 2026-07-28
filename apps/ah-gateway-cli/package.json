@@ -14,6 +14,7 @@
   },
   "dependencies": {
     "@verified-financial/provider-baidu": "workspace:*",
+    "@verified-financial/provider-cninfo": "workspace:*",
     "@verified-financial/provider-contract": "workspace:*",
     "@verified-financial/provider-eastmoney": "workspace:*",
     "@verified-financial/provider-tencent": "workspace:*",

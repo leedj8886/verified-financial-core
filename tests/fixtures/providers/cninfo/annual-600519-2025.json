@@ -1,0 +1,36 @@
+{
+  "totalAnnouncement": 3,
+  "totalRecordNum": 3,
+  "announcements": [
+    {
+      "secCode": "600519",
+      "secName": "贵州茅台",
+      "orgId": "gssh0600519",
+      "announcementId": "1225114741",
+      "announcementTitle": "贵州茅台2025年年度报告",
+      "announcementTime": 1776355200000,
+      "adjunctUrl": "finalpage/2026-04-17/1225114741.PDF",
+      "adjunctType": "PDF"
+    },
+    {
+      "secCode": "600519",
+      "secName": "贵州茅台",
+      "orgId": "gssh0600519",
+      "announcementId": "1225114733",
+      "announcementTitle": "贵州茅台2025年年度报告（英文版）",
+      "announcementTime": 1776355200000,
+      "adjunctUrl": "finalpage/2026-04-17/1225114733.PDF",
+      "adjunctType": "PDF"
+    },
+    {
+      "secCode": "600519",
+      "secName": "贵州茅台",
+      "orgId": "gssh0600519",
+      "announcementId": "1225114731",
+      "announcementTitle": "贵州茅台2025年年度报告摘要",
+      "announcementTime": 1776355200000,
+      "adjunctUrl": "finalpage/2026-04-17/1225114731.PDF",
+      "adjunctType": "PDF"
+    }
+  ]
+}

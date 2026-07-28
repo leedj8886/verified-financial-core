@@ -21,7 +21,7 @@ Implemented:
   deterministic FactSet assembly;
 - immutable SHA-256 raw snapshot storage and SQLite audit metadata;
 - runtime-validated Provider contract;
-- token-free Eastmoney, Tencent, and Baidu public-data Providers;
+- token-free CNINFO official-filing, Eastmoney, Tencent, and Baidu Providers;
 - exact cross-source comparison across different source scales;
 - capability-aware Provider routing and request-level FactSet caching;
 - automatic, traceable FCF, explicit-quarter TTM-flow, and market-cap
@@ -31,12 +31,15 @@ Implemented:
 - offline-safe `ah-context` JSON CLI;
 - provider-neutral fixture and Golden tests.
 
-The local Gateway registers the three public Providers by default. Eastmoney
-supplies A/H quotes and A-share statements; Tencent and Baidu independently
-cross-check market and valuation fields. Tushare remains optional and the
-default runtime and test suite require no token or interface ledger. Official
-disclosure parsing remains the next source-layer stage and will arbitrate
-conflicts rather than creating a separate data model.
+The local Gateway registers four token-free Providers by default. CNINFO
+resolves A-share issuers, discovers periodic filings, snapshots the official
+PDF, and extracts a constrained set of consolidated financial facts.
+Eastmoney supplies A/H quotes and A-share statements; Tencent and Baidu
+independently cross-check market and valuation fields. Official CNINFO facts
+adjudicate compatible A-share conflicts through the same verification core.
+Tushare remains optional and the default runtime and test suite require no
+token or interface ledger. HKEX filing extraction remains the next
+source-layer stage.
 
 ## Requirements
 
@@ -121,6 +124,7 @@ other non-additive ratios are intentionally not inferred.
 - `@verified-financial/schema`
 - `@verified-financial/core`
 - `@verified-financial/provider-contract`
+- `@verified-financial/provider-cninfo`
 - `@verified-financial/provider-eastmoney`
 - `@verified-financial/provider-tencent`
 - `@verified-financial/provider-baidu`
@@ -132,5 +136,6 @@ See [the approved architecture](docs/superpowers/specs/2026-07-26-verified-finan
 and the implementation plans for
 [storage/Gateway](docs/plans/2026-07-27-storage-gateway.md),
 [routing/cache](docs/plans/2026-07-27-gateway-cache-routing.md),
-[derivation orchestration](docs/plans/2026-07-28-gateway-derivations.md), and
+[derivation orchestration](docs/plans/2026-07-28-gateway-derivations.md),
+[CNINFO official filings](docs/plans/2026-07-28-cninfo-provider.md), and
 [public A/H Providers](docs/plans/2026-07-27-market-providers.md).

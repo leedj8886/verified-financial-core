@@ -32,6 +32,9 @@ importers:
       '@verified-financial/provider-baidu':
         specifier: workspace:*
         version: link:../../packages/provider-baidu
+      '@verified-financial/provider-cninfo':
+        specifier: workspace:*
+        version: link:../../packages/provider-cninfo
       '@verified-financial/provider-contract':
         specifier: workspace:*
         version: link:../../packages/provider-contract
@@ -91,6 +94,28 @@ importers:
       '@verified-financial/schema':
         specifier: workspace:*
         version: link:../schema
+    devDependencies:
+      tsup:
+        specifier: ^8.0.0
+        version: 8.5.1(typescript@5.9.3)
+      typescript:
+        specifier: ^5.9.0
+        version: 5.9.3
+      vitest:
+        specifier: ^3.2.0
+        version: 3.2.7(@types/node@22.20.1)
+
+  packages/provider-cninfo:
+    dependencies:
+      '@verified-financial/provider-contract':
+        specifier: workspace:*
+        version: link:../provider-contract
+      '@verified-financial/schema':
+        specifier: workspace:*
+        version: link:../schema
+      unpdf:
+        specifier: ^1.8.0
+        version: 1.8.0
     devDependencies:
       tsup:
         specifier: ^8.0.0
@@ -2153,6 +2178,16 @@ packages:
   /undici-types@6.21.0:
     resolution: {integrity: sha512-iwDZqg0QAGrg9Rav5H4n0M64c3mkR59cJ6wQp+7C4nI0gsmExaedaYLNO44eT4AtBBwjbTiGPMlt2Md0T9H9JQ==}
     dev: true
+
+  /unpdf@1.8.0:
+    resolution: {integrity: sha512-jQlkckbe5nKxRHQdbvo9IKHlU6Cjq00UlxxB8lrCIxvS2o5IbAL1wM+4a1Yc3+BIohg9p5AsoaftwO+G4Aq/qQ==}
+    engines: {node: '>=22'}
+    peerDependencies:
+      '@napi-rs/canvas': ^0.1.69 || ^1.0.0
+    peerDependenciesMeta:
+      '@napi-rs/canvas':
+        optional: true
+    dev: false
 
   /util-deprecate@1.0.2:
     resolution: {integrity: sha512-EPD5q1uXyFxJpCrLnCc1nHnq3gOa6DZBocAIiI2TaSCA7VCJ1UJDMagCzIkXNsUYfD1daK//LTEQ8xiIbrHtcw==}

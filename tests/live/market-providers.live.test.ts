@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { BaiduProvider } from "../../packages/provider-baidu/src/index.js";
+import { CninfoProvider } from "../../packages/provider-cninfo/src/index.js";
 import {
   parseProviderBatch,
   type ProviderRequest,
@@ -89,5 +90,29 @@ describe("public A/H provider live canaries", () => {
         }),
       }),
     ]);
+  });
+
+  it("CNINFO returns a fact extracted from an official annual filing", async () => {
+    const provider = new CninfoProvider();
+    const batch = await fetchLive(provider, {
+      ...marketRequest,
+      requirements: [{
+        conceptId: "income.revenue",
+        required: true,
+        period: { fiscalYear: 2025, presentation: "annual" },
+      }],
+    });
+    expect(batch.issues).toEqual([]);
+    expect(batch.observations).toEqual([
+      expect.objectContaining({
+        concept: "income.revenue",
+        provenance: expect.objectContaining({
+          sourceType: "official",
+          extractionMethod: "pdf",
+        }),
+      }),
+    ]);
+    expect(batch.rawSnapshots.map((snapshot) => snapshot.mediaType))
+      .toEqual(["json", "json", "pdf"]);
   });
 });
