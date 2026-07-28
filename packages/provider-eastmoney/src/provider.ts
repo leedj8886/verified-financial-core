@@ -27,8 +27,10 @@ import {
 
 const PROVIDER_ID = "eastmoney-direct";
 const UPSTREAM_SOURCE_ID = "eastmoney";
-const MAPPING_VERSION = "eastmoney@1.0.0";
+const MAPPING_VERSION = "eastmoney@1.1.0";
 const QUOTE_ENDPOINT = "https://push2.eastmoney.com/api/qt/stock/get";
+const HISTORY_ENDPOINT =
+  "https://push2his.eastmoney.com/api/qt/stock/kline/get";
 const FINANCIAL_ENDPOINT =
   "https://datacenter-web.eastmoney.com/api/data/v1/get";
 
@@ -39,6 +41,7 @@ export interface EastmoneyProviderOptions {
   retries?: number;
   timeoutMs?: number;
   quoteEndpoint?: string;
+  historyEndpoint?: string;
   financialEndpoint?: string;
 }
 
@@ -95,6 +98,14 @@ const financialFields: Record<FinancialQuery["reportName"], FinancialField[]> = 
 };
 
 export const EASTMONEY_FIELD_MAPPINGS: readonly SourceFieldMapping[] = [
+  {
+    upstreamSchema: "push2his.daily-kline",
+    rawField: "f53",
+    conceptId: "market.price.close",
+    unit: "currency",
+    scale: "1",
+    transformIds: ["unadjusted-daily-close", "conservative-market-close"],
+  },
   {
     upstreamSchema: "push2.quote",
     rawField: "f43",
@@ -200,6 +211,59 @@ function quotePeriod(timestampSeconds: string): ReportingPeriod {
     fiscalYear: Number(endDate.slice(0, 4)),
     presentation: "annual",
   };
+}
+
+function historicalPeriod(date: string): ReportingPeriod {
+  return {
+    kind: "instant",
+    endDate: date,
+    fiscalYear: Number(date.slice(0, 4)),
+    presentation: "annual",
+  };
+}
+
+function historicalPublishedAt(
+  date: string,
+  exchangeMic: ProviderRequest["instrument"]["exchangeMic"],
+): string {
+  const time = exchangeMic === "XHKG" ? "16:30:00" : "15:30:00";
+  return `${date}T${time}+08:00`;
+}
+
+function isHistoricalDate(asOf: string, now: string): boolean {
+  return marketDate(String(Date.parse(asOf) / 1000))
+    < marketDate(String(Date.parse(now) / 1000));
+}
+
+function shiftDate(date: string, days: number): string {
+  const value = new Date(`${date}T00:00:00Z`);
+  value.setUTCDate(value.getUTCDate() + days);
+  return value.toISOString().slice(0, 10);
+}
+
+interface DailyClose {
+  date: string;
+  close: string;
+}
+
+function parseDailyCloses(value: unknown): DailyClose[] {
+  const object = asObject(value, "Eastmoney history response is not an object");
+  const data = asObject(
+    object["data"],
+    "Eastmoney history data is missing",
+  );
+  const klines = data["klines"];
+  if (!Array.isArray(klines)) {
+    throw new Error("Eastmoney history klines are missing");
+  }
+  return klines.flatMap((item) => {
+    if (typeof item !== "string") return [];
+    const fields = item.split(",");
+    const date = fields[0];
+    const close = exactDecimal(fields[2]);
+    if (date === undefined || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return [];
+    return close === undefined ? [] : [{ date, close }];
+  });
 }
 
 function quoteBasis(currency: string) {
@@ -346,6 +410,23 @@ export class EastmoneyProvider implements SourceProvider {
     return url.toString();
   }
 
+  private historyUrl(instrumentId: string, asOf: string): string {
+    const endDate = marketDate(String(Date.parse(asOf) / 1000));
+    const url = new URL(this.options.historyEndpoint ?? HISTORY_ENDPOINT);
+    url.searchParams.set("secid", marketCode(instrumentId));
+    url.searchParams.set("fields1", "f1,f2,f3,f4,f5,f6");
+    url.searchParams.set(
+      "fields2",
+      "f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61",
+    );
+    url.searchParams.set("klt", "101");
+    url.searchParams.set("fqt", "0");
+    url.searchParams.set("beg", shiftDate(endDate, -370).replaceAll("-", ""));
+    url.searchParams.set("end", endDate.replaceAll("-", ""));
+    url.searchParams.set("lmt", "400");
+    return url.toString();
+  }
+
   private financialUrl(
     symbol: string,
     query: FinancialQuery,
@@ -403,7 +484,13 @@ export class EastmoneyProvider implements SourceProvider {
     const requestedConcepts = new Set(
       request.requirements.map((requirement) => requirement.conceptId),
     );
-    if ([...requestedConcepts].some((concept) => MARKET_CONCEPTS.has(concept))) {
+    const historicalClose = requestedConcepts.has("market.price.close")
+      && isHistoricalDate(request.asOf, context.now);
+    const needsCurrentQuote = [...requestedConcepts].some((concept) =>
+      MARKET_CONCEPTS.has(concept)
+      && !(concept === "market.price.close" && historicalClose)
+    );
+    if (needsCurrentQuote) {
       try {
         let sourceUrl = this.quoteUrl(request.instrument.instrumentId);
         let response: Awaited<ReturnType<EastmoneyProvider["request"]>>;
@@ -440,6 +527,7 @@ export class EastmoneyProvider implements SourceProvider {
         ];
         for (const [rawField, concept, unit] of marketFields) {
           if (!requestedConcepts.has(concept)) continue;
+          if (concept === "market.price.close" && historicalClose) continue;
           const value = exactDecimal(data[rawField]);
           if (value === undefined) continue;
           observations.push(ObservationSchema.parse({
@@ -499,6 +587,102 @@ export class EastmoneyProvider implements SourceProvider {
               message: error instanceof Error
                 ? error.message
                 : "Failed to parse Eastmoney quote",
+              retryable: false,
+            });
+      }
+    }
+
+    if (historicalClose) {
+      const sourceUrl = this.historyUrl(
+        request.instrument.instrumentId,
+        request.asOf,
+      );
+      try {
+        const { parsed, snapshot } = await this.request(sourceUrl, context);
+        rawSnapshots.push(snapshot);
+        const data = asObject(
+          parsed["data"],
+          "Eastmoney history data is missing",
+        );
+        legalName = asString(data["name"]) ?? legalName;
+        const dailyClose = parseDailyCloses(parsed)
+          .filter((item) =>
+            Date.parse(historicalPublishedAt(
+              item.date,
+              request.instrument.exchangeMic,
+            )) <= Date.parse(request.asOf)
+          )
+          .sort((left, right) => right.date.localeCompare(left.date))[0];
+        if (dailyClose === undefined) {
+          throw new ProviderFailure({
+            providerId: this.providerId,
+            code: "EMPTY_RESPONSE",
+            message:
+              `Eastmoney has no unadjusted daily close available as of ${request.asOf}`,
+            retryable: false,
+          });
+        }
+        const publishedAt = historicalPublishedAt(
+          dailyClose.date,
+          request.instrument.exchangeMic,
+        );
+        const period = historicalPeriod(dailyClose.date);
+        observations.push(ObservationSchema.parse({
+          observationId: stableId("obs", {
+            providerId: this.providerId,
+            snapshotId: snapshot.snapshotId,
+            rawField: "f53",
+            concept: "market.price.close",
+            period,
+          }),
+          companyId: request.instrument.companyId,
+          instrumentId: request.instrument.instrumentId,
+          concept: "market.price.close",
+          value: dailyClose.close,
+          unit: request.instrument.tradingCurrency,
+          scale: "1",
+          period,
+          basis: quoteBasis(request.instrument.tradingCurrency),
+          availability: {
+            publishedAt,
+            sourceAsOf: publishedAt,
+            fetchedAt: context.now,
+          },
+          provenance: {
+            providerId: this.providerId,
+            upstreamSourceId: this.upstreamSourceId,
+            sourceType: "aggregator",
+            sourceUrl,
+            rawSnapshotId: snapshot.snapshotId,
+            rawField: "f53",
+            extractionMethod: "api",
+            fetchedAt: context.now,
+            transformations: [
+              {
+                transformId: "unadjusted-daily-close",
+                version: "1.0.0",
+                detail: "Request daily K-line data with fqt=0",
+              },
+              {
+                transformId: "conservative-market-close",
+                version: "1.0.0",
+                detail:
+                  request.instrument.exchangeMic === "XHKG"
+                    ? "Treat the HK daily close as available at 16:30 +08:00"
+                    : "Treat the mainland daily close as available at 15:30 +08:00",
+              },
+            ],
+          },
+        }));
+      } catch (error) {
+        issues.push(error instanceof ProviderFailure
+          ? error.issue
+          : {
+              providerId: this.providerId,
+              code: "PARSE_FAILED",
+              message: error instanceof Error
+                ? error.message
+                : "Failed to parse Eastmoney history",
               retryable: false,
             });
       }

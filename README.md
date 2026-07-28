@@ -23,6 +23,8 @@ Implemented:
 - runtime-validated Provider contract;
 - token-free CNINFO/HKEX official-filing, Eastmoney, Tencent, and Baidu
   Providers;
+- traceable, unadjusted Tencent/Eastmoney daily closes for historical `asOf`
+  queries;
 - exact cross-source comparison across different source scales;
 - capability-aware Provider routing and request-level FactSet caching;
 - automatic, traceable FCF, explicit-quarter TTM-flow, and market-cap
@@ -86,6 +88,20 @@ pnpm --silent ah-context facts 600519.SH \
   --format json
 ```
 
+Request the last unadjusted daily close available on a historical date:
+
+```bash
+pnpm --silent ah-context facts 600519.SH \
+  --concept market.price.close \
+  --as-of 2025-07-27 \
+  --format json
+```
+
+Historical daily closes use the latest trading day at or before `asOf`, so a
+weekend request may return the preceding Friday. Mainland daily closes are
+conservatively available from 15:30 +08:00 and Hong Kong closes from 16:30
++08:00. Same-calendar-day requests continue to use the current quote path.
+
 Period syntax includes `2025FY`, `2025Q3`, `2025Q3YTD`, `2025TTM`, and the
 explicit-quarter TTM form `2026Q2TTM`. Automatic TTM derivation requires the
 explicit-quarter form.
@@ -142,5 +158,6 @@ and the implementation plans for
 [routing/cache](docs/plans/2026-07-27-gateway-cache-routing.md),
 [derivation orchestration](docs/plans/2026-07-28-gateway-derivations.md),
 [CNINFO official filings](docs/plans/2026-07-28-cninfo-provider.md),
-[HKEX official filings](docs/plans/2026-07-28-hkex-provider.md), and
+[HKEX official filings](docs/plans/2026-07-28-hkex-provider.md),
+[historical daily close](docs/plans/2026-07-28-historical-close.md), and
 [public A/H Providers](docs/plans/2026-07-27-market-providers.md).

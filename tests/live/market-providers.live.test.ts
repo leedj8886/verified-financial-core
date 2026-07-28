@@ -93,6 +93,69 @@ describe("public A/H provider live canaries", () => {
     ]);
   });
 
+  it("Tencent returns the last historical unadjusted daily close", async () => {
+    const provider = new TencentProvider();
+    const batch = await fetchLive(provider, {
+      ...marketRequest,
+      requirements: [{
+        conceptId: "market.price.close",
+        required: true,
+      }],
+      asOf: "2025-07-27T23:59:59+08:00",
+    });
+    expect(batch.issues).toEqual([]);
+    expect(batch.observations).toEqual([
+      expect.objectContaining({
+        concept: "market.price.close",
+        value: "1455.000",
+        period: expect.objectContaining({
+          endDate: "2025-07-25",
+        }),
+        provenance: expect.objectContaining({
+          rawField: "[2]",
+          transformations: expect.arrayContaining([
+            expect.objectContaining({
+              transformId: "unadjusted-daily-close",
+            }),
+          ]),
+        }),
+      }),
+    ]);
+  });
+
+  it("Tencent returns a historical Hong Kong daily close", async () => {
+    const provider = new TencentProvider();
+    const batch = await fetchLive(provider, {
+      instrument: {
+        instrumentId: "XHKG:00700",
+        companyId: "company:XHKG:00700",
+        exchangeMic: "XHKG",
+        symbol: "00700",
+        shareClass: "H",
+        tradingCurrency: "HKD",
+      },
+      requirements: [{
+        conceptId: "market.price.close",
+        required: true,
+      }],
+      asOf: "2025-07-27T23:59:59+08:00",
+      offline: false,
+    });
+    expect(batch.issues).toEqual([]);
+    expect(batch.observations).toEqual([
+      expect.objectContaining({
+        concept: "market.price.close",
+        value: "550.500",
+        period: expect.objectContaining({
+          endDate: "2025-07-25",
+        }),
+        availability: expect.objectContaining({
+          publishedAt: "2025-07-25T16:30:00+08:00",
+        }),
+      }),
+    ]);
+  });
+
   it("CNINFO returns a fact extracted from an official annual filing", async () => {
     const provider = new CninfoProvider();
     const batch = await fetchLive(provider, {

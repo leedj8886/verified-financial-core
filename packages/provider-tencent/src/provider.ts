@@ -19,17 +19,28 @@ import {
 
 const PROVIDER_ID = "tencent-direct";
 const UPSTREAM_SOURCE_ID = "tencent";
-const MAPPING_VERSION = "tencent@1.0.0";
+const MAPPING_VERSION = "tencent@1.1.0";
 const QUOTE_ENDPOINT = "https://qt.gtimg.cn/q=";
+const HISTORY_ENDPOINT =
+  "https://web.ifzq.gtimg.cn/appstock/app/kline/kline";
 
 export interface TencentProviderOptions {
   fetchImplementation?: FetchImplementation;
   retries?: number;
   timeoutMs?: number;
   quoteEndpoint?: string;
+  historyEndpoint?: string;
 }
 
 export const TENCENT_FIELD_MAPPINGS: readonly SourceFieldMapping[] = [
+  {
+    upstreamSchema: "appstock.day",
+    rawField: "[2]",
+    conceptId: "market.price.close",
+    unit: "currency",
+    scale: "1",
+    transformIds: ["unadjusted-daily-close", "conservative-market-close"],
+  },
   {
     upstreamSchema: "qt.quote",
     rawField: "3",
@@ -119,6 +130,78 @@ function quotePeriod(date: string, concept: ConceptId): ReportingPeriod {
   };
 }
 
+function historicalPeriod(date: string): ReportingPeriod {
+  return {
+    kind: "instant",
+    endDate: date,
+    fiscalYear: Number(date.slice(0, 4)),
+    presentation: "annual",
+  };
+}
+
+function historicalPublishedAt(
+  date: string,
+  exchangeMic: ProviderRequest["instrument"]["exchangeMic"],
+): string {
+  const time = exchangeMic === "XHKG" ? "16:30:00" : "15:30:00";
+  return `${date}T${time}+08:00`;
+}
+
+function calendarDate(value: string): string {
+  return new Date(Date.parse(value) + 8 * 60 * 60 * 1_000)
+    .toISOString()
+    .slice(0, 10);
+}
+
+function isHistoricalDate(asOf: string, now: string): boolean {
+  return calendarDate(asOf) < calendarDate(now);
+}
+
+function shiftDate(date: string, days: number): string {
+  const value = new Date(`${date}T00:00:00Z`);
+  value.setUTCDate(value.getUTCDate() + days);
+  return value.toISOString().slice(0, 10);
+}
+
+interface DailyClose {
+  date: string;
+  close: string;
+}
+
+function asObject(value: unknown, message: string): Record<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error(message);
+  }
+  return value as Record<string, unknown>;
+}
+
+function parseDailyCloses(
+  value: unknown,
+  symbol: string,
+): DailyClose[] {
+  const object = asObject(value, "Tencent history response is not an object");
+  const data = asObject(object["data"], "Tencent history data is missing");
+  const instrument = asObject(
+    data[symbol],
+    `Tencent history data is missing for ${symbol}`,
+  );
+  const rows = instrument["day"];
+  if (!Array.isArray(rows)) {
+    throw new Error("Tencent unadjusted daily rows are missing");
+  }
+  return rows.flatMap((row) => {
+    if (!Array.isArray(row)) return [];
+    const date = row[0];
+    const close = typeof row[2] === "string"
+      ? exactDecimal(row[2])
+      : undefined;
+    if (typeof date !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      return [];
+    }
+    return close === undefined ? [] : [{ date, close }];
+  });
+}
+
 function parseFields(bytes: Uint8Array): string[] {
   const text = new TextDecoder("gb18030").decode(bytes);
   const match = /="([^"]*)"/.exec(text);
@@ -143,6 +226,17 @@ export class TencentProvider implements SourceProvider {
 
   constructor(private readonly options: TencentProviderOptions = {}) {}
 
+  private historyUrl(instrumentId: string, asOf: string): string {
+    const endDate = calendarDate(asOf);
+    const symbol = quoteSymbol(instrumentId);
+    const url = new URL(this.options.historyEndpoint ?? HISTORY_ENDPOINT);
+    url.searchParams.set(
+      "param",
+      `${symbol},day,${shiftDate(endDate, -370)},${endDate},400`,
+    );
+    return url.toString();
+  }
+
   async fetch(
     request: ProviderRequest,
     context: ProviderContext,
@@ -159,74 +253,196 @@ export class TencentProvider implements SourceProvider {
         message: "Offline mode does not access Tencent",
         retryable: false,
       });
-    } else if (
-      request.requirements.some((requirement) =>
-        fieldByConcept.has(requirement.conceptId)
-      )
-    ) {
-      const sourceUrl = `${
-        this.options.quoteEndpoint ?? QUOTE_ENDPOINT
-      }${quoteSymbol(request.instrument.instrumentId)}`;
-      try {
-        const bytes = await fetchBytes(sourceUrl, {
-          providerId: this.providerId,
-          signal: context.signal,
-          ...(this.options.fetchImplementation === undefined
-            ? {}
-            : { fetchImplementation: this.options.fetchImplementation }),
-          ...(this.options.retries === undefined
-            ? {}
-            : { retries: this.options.retries }),
-          ...(this.options.timeoutMs === undefined
-            ? {}
-            : { timeoutMs: this.options.timeoutMs }),
-          headers: {
-            Accept: "text/plain,*/*",
-            Referer: "https://gu.qq.com/",
-            "User-Agent": "verified-financial-core/0.1",
-          },
-        });
-        const snapshot = await context.snapshots.put({
-          providerId: this.providerId,
-          sourceUrl,
-          mediaType: "text",
-          fetchedAt: context.now,
-          body: bytes,
-        });
-        rawSnapshots.push(snapshot);
-        const fields = parseFields(bytes);
-        legalName = fields[1] || legalName;
-        const timestamp = parseTimestamp(fields[30] ?? "");
-        const requestedConcepts = new Set(
-          request.requirements.map((item) => item.conceptId),
-        );
-        for (const [concept, mapping] of fieldByConcept) {
-          if (!requestedConcepts.has(concept)) continue;
-          if (
-            mapping.aShareOnly === true
-            && request.instrument.exchangeMic === "XHKG"
-          ) {
-            continue;
+    } else {
+      const requestedConcepts = new Set(
+        request.requirements.map((item) => item.conceptId),
+      );
+      const historicalClose = requestedConcepts.has("market.price.close")
+        && isHistoricalDate(request.asOf, context.now);
+      const needsCurrentQuote = [...requestedConcepts].some((concept) =>
+        fieldByConcept.has(concept)
+        && !(concept === "market.price.close" && historicalClose)
+      );
+      if (needsCurrentQuote) {
+        const sourceUrl = `${
+          this.options.quoteEndpoint ?? QUOTE_ENDPOINT
+        }${quoteSymbol(request.instrument.instrumentId)}`;
+        try {
+          const bytes = await fetchBytes(sourceUrl, {
+            providerId: this.providerId,
+            signal: context.signal,
+            ...(this.options.fetchImplementation === undefined
+              ? {}
+              : { fetchImplementation: this.options.fetchImplementation }),
+            ...(this.options.retries === undefined
+              ? {}
+              : { retries: this.options.retries }),
+            ...(this.options.timeoutMs === undefined
+              ? {}
+              : { timeoutMs: this.options.timeoutMs }),
+            headers: {
+              Accept: "text/plain,*/*",
+              Referer: "https://gu.qq.com/",
+              "User-Agent": "verified-financial-core/0.1",
+            },
+          });
+          const snapshot = await context.snapshots.put({
+            providerId: this.providerId,
+            sourceUrl,
+            mediaType: "text",
+            fetchedAt: context.now,
+            body: bytes,
+          });
+          rawSnapshots.push(snapshot);
+          const fields = parseFields(bytes);
+          legalName = fields[1] || legalName;
+          const timestamp = parseTimestamp(fields[30] ?? "");
+          for (const [concept, mapping] of fieldByConcept) {
+            if (!requestedConcepts.has(concept)) continue;
+            if (concept === "market.price.close" && historicalClose) continue;
+            if (
+              mapping.aShareOnly === true
+              && request.instrument.exchangeMic === "XHKG"
+            ) {
+              continue;
+            }
+            const value = exactDecimal(fields[mapping.index]);
+            if (value === undefined) continue;
+            const period = quotePeriod(timestamp.date, concept);
+            const unit = concept === "market.price.close"
+                || concept === "market.cap"
+              ? request.instrument.tradingCurrency
+              : "ratio";
+            observations.push(ObservationSchema.parse({
+              observationId: stableId({
+                snapshotId: snapshot.snapshotId,
+                concept,
+                period,
+              }),
+              companyId: request.instrument.companyId,
+              instrumentId: request.instrument.instrumentId,
+              concept,
+              value,
+              unit,
+              scale: mapping.scale,
+              period,
+              basis: {
+                standard: "OTHER",
+                scope: "standalone",
+                presentation: "reported",
+                attribution: "all-shareholders",
+                currency: request.instrument.tradingCurrency,
+              },
+              availability: {
+                publishedAt: timestamp.publishedAt,
+                sourceAsOf: timestamp.publishedAt,
+                fetchedAt: context.now,
+              },
+              provenance: {
+                providerId: this.providerId,
+                upstreamSourceId: this.upstreamSourceId,
+                sourceType: "aggregator",
+                sourceUrl,
+                rawSnapshotId: snapshot.snapshotId,
+                rawField: String(mapping.index),
+                extractionMethod: "api",
+                fetchedAt: context.now,
+                transformations: mapping.scale === "1"
+                  ? []
+                  : [{
+                      transformId: "yi-currency-scale",
+                      version: "1.0.0",
+                      detail:
+                        "Tencent reports market cap in 100 million currency units",
+                    }],
+              },
+            }));
           }
-          const value = exactDecimal(fields[mapping.index]);
-          if (value === undefined) continue;
-          const period = quotePeriod(timestamp.date, concept);
-          const unit = concept === "market.price.close"
-              || concept === "market.cap"
-            ? request.instrument.tradingCurrency
-            : "ratio";
+        } catch (error) {
+          issues.push(error instanceof ProviderFailure
+            ? error.issue
+            : {
+              providerId: this.providerId,
+              code: "PARSE_FAILED",
+              message: error instanceof Error
+                ? error.message
+                : "Failed to parse Tencent quote",
+              retryable: false,
+            });
+        }
+      }
+
+      if (historicalClose) {
+        const sourceUrl = this.historyUrl(
+          request.instrument.instrumentId,
+          request.asOf,
+        );
+        try {
+          const bytes = await fetchBytes(sourceUrl, {
+            providerId: this.providerId,
+            signal: context.signal,
+            ...(this.options.fetchImplementation === undefined
+              ? {}
+              : { fetchImplementation: this.options.fetchImplementation }),
+            ...(this.options.retries === undefined
+              ? {}
+              : { retries: this.options.retries }),
+            ...(this.options.timeoutMs === undefined
+              ? {}
+              : { timeoutMs: this.options.timeoutMs }),
+            headers: {
+              Accept: "application/json,text/plain,*/*",
+              Referer: "https://gu.qq.com/",
+              "User-Agent": "verified-financial-core/0.1",
+            },
+          });
+          const snapshot = await context.snapshots.put({
+            providerId: this.providerId,
+            sourceUrl,
+            mediaType: "json",
+            fetchedAt: context.now,
+            body: bytes,
+          });
+          rawSnapshots.push(snapshot);
+          const parsed: unknown = JSON.parse(new TextDecoder().decode(bytes));
+          const dailyClose = parseDailyCloses(
+            parsed,
+            quoteSymbol(request.instrument.instrumentId),
+          )
+            .filter((item) =>
+              Date.parse(historicalPublishedAt(
+                item.date,
+                request.instrument.exchangeMic,
+              )) <= Date.parse(request.asOf)
+            )
+            .sort((left, right) => right.date.localeCompare(left.date))[0];
+          if (dailyClose === undefined) {
+            throw new ProviderFailure({
+              providerId: this.providerId,
+              code: "EMPTY_RESPONSE",
+              message:
+                `Tencent has no unadjusted daily close available as of ${request.asOf}`,
+              retryable: false,
+            });
+          }
+          const publishedAt = historicalPublishedAt(
+            dailyClose.date,
+            request.instrument.exchangeMic,
+          );
+          const period = historicalPeriod(dailyClose.date);
           observations.push(ObservationSchema.parse({
             observationId: stableId({
               snapshotId: snapshot.snapshotId,
-              concept,
+              rawField: "[2]",
+              concept: "market.price.close",
               period,
             }),
             companyId: request.instrument.companyId,
             instrumentId: request.instrument.instrumentId,
-            concept,
-            value,
-            unit,
-            scale: mapping.scale,
+            concept: "market.price.close",
+            value: dailyClose.close,
+            unit: request.instrument.tradingCurrency,
+            scale: "1",
             period,
             basis: {
               standard: "OTHER",
@@ -236,8 +452,8 @@ export class TencentProvider implements SourceProvider {
               currency: request.instrument.tradingCurrency,
             },
             availability: {
-              publishedAt: timestamp.publishedAt,
-              sourceAsOf: timestamp.publishedAt,
+              publishedAt,
+              sourceAsOf: publishedAt,
               fetchedAt: context.now,
             },
             provenance: {
@@ -246,30 +462,38 @@ export class TencentProvider implements SourceProvider {
               sourceType: "aggregator",
               sourceUrl,
               rawSnapshotId: snapshot.snapshotId,
-              rawField: String(mapping.index),
+              rawField: "[2]",
               extractionMethod: "api",
               fetchedAt: context.now,
-              transformations: mapping.scale === "1"
-                ? []
-                : [{
-                    transformId: "yi-currency-scale",
-                    version: "1.0.0",
-                    detail: "Tencent reports market cap in 100 million currency units",
-                  }],
+              transformations: [
+                {
+                  transformId: "unadjusted-daily-close",
+                  version: "1.0.0",
+                  detail: "Request Tencent appstock day data without qfq/hfq",
+                },
+                {
+                  transformId: "conservative-market-close",
+                  version: "1.0.0",
+                  detail:
+                    request.instrument.exchangeMic === "XHKG"
+                      ? "Treat the HK daily close as available at 16:30 +08:00"
+                      : "Treat the mainland daily close as available at 15:30 +08:00",
+                },
+              ],
             },
           }));
+        } catch (error) {
+          issues.push(error instanceof ProviderFailure
+            ? error.issue
+            : {
+                providerId: this.providerId,
+                code: "PARSE_FAILED",
+                message: error instanceof Error
+                  ? error.message
+                  : "Failed to parse Tencent history",
+                retryable: false,
+              });
         }
-      } catch (error) {
-        issues.push(error instanceof ProviderFailure
-          ? error.issue
-          : {
-              providerId: this.providerId,
-              code: "PARSE_FAILED",
-              message: error instanceof Error
-                ? error.message
-                : "Failed to parse Tencent quote",
-              retryable: false,
-            });
       }
     }
 

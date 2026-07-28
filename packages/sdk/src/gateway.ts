@@ -40,7 +40,7 @@ import {
 } from "./derivation-orchestrator.js";
 
 const DEFAULT_SCHEMA_VERSION = "1.0.0";
-const DEFAULT_VALIDATION_RULES_VERSION = "1.3.0";
+const DEFAULT_VALIDATION_RULES_VERSION = "1.4.0";
 
 export class GatewayError extends Error {
   readonly code: "NOT_FOUND" | "INVALID_INPUT" | "STORAGE_ERROR";

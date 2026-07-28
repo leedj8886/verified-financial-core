@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import {
   parseProviderBatch,
   type FetchImplementation,
+  type ProviderRequest,
   type SnapshotWriter,
 } from "@verified-financial/provider-contract";
 import { describe, expect, it, vi } from "vitest";
@@ -132,5 +133,114 @@ describe("EastmoneyProvider", () => {
     });
     expect(batch.issues[0]?.code).toBe("EMPTY_RESPONSE");
     expect(batch.rawSnapshots).toEqual([]);
+  });
+
+  it("returns the last unadjusted daily close available at historical as-of", async () => {
+    const fetchImplementation = vi.fn<FetchImplementation>(
+      async (input) => {
+        const url = new URL(String(input));
+        expect(url.hostname).toBe("history.example");
+        expect(url.searchParams.get("fqt")).toBe("0");
+        expect(url.searchParams.get("klt")).toBe("101");
+        expect(url.searchParams.get("end")).toBe("20250727");
+        return new Response(await fixture("history-600519-2025.json"));
+      },
+    );
+    const provider = new EastmoneyProvider({
+      fetchImplementation,
+      historyEndpoint: "https://history.example/kline",
+      retries: 0,
+    });
+    const historicalRequest: ProviderRequest = {
+      instrument: {
+        instrumentId: "XSHG:600519",
+        companyId: "company:XSHG:600519",
+        exchangeMic: "XSHG",
+        symbol: "600519",
+        shareClass: "A",
+        tradingCurrency: "CNY",
+      },
+      requirements: [{
+        conceptId: "market.price.close",
+        required: true,
+      }],
+      asOf: "2025-07-27T23:59:59+08:00",
+      offline: false,
+    };
+    const batch = parseProviderBatch(provider, await provider.fetch(
+      historicalRequest,
+      {
+        signal: new AbortController().signal,
+        now: "2026-07-28T10:00:00+08:00",
+        snapshots,
+      },
+    ));
+    expect(batch.issues).toEqual([]);
+    expect(batch.company.legalName).toBe("贵州茅台");
+    expect(batch.rawSnapshots).toHaveLength(1);
+    expect(batch.observations).toEqual([
+      expect.objectContaining({
+        concept: "market.price.close",
+        value: "1455.00",
+        period: expect.objectContaining({
+          endDate: "2025-07-25",
+        }),
+        availability: expect.objectContaining({
+          publishedAt: "2025-07-25T15:30:00+08:00",
+        }),
+        provenance: expect.objectContaining({
+          rawField: "f53",
+          transformations: [
+            expect.objectContaining({
+              transformId: "unadjusted-daily-close",
+            }),
+            expect.objectContaining({
+              transformId: "conservative-market-close",
+            }),
+          ],
+        }),
+      }),
+    ]);
+    expect(fetchImplementation).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not expose a same-day daily close before the conservative close time", async () => {
+    const provider = new EastmoneyProvider({
+      fetchImplementation: async () =>
+        new Response(await fixture("history-600519-2025.json")),
+      historyEndpoint: "https://history.example/kline",
+      retries: 0,
+    });
+    const baseRequest: ProviderRequest = {
+      instrument: {
+        instrumentId: "XSHG:600519",
+        companyId: "company:XSHG:600519",
+        exchangeMic: "XSHG",
+        symbol: "600519",
+        shareClass: "A",
+        tradingCurrency: "CNY",
+      },
+      requirements: [{
+        conceptId: "market.price.close",
+        required: true,
+      }],
+      asOf: "2025-07-25T15:29:59+08:00",
+      offline: false,
+    };
+    const beforeClose = await provider.fetch(baseRequest, {
+      signal: new AbortController().signal,
+      now: "2026-07-28T10:00:00+08:00",
+      snapshots,
+    });
+    expect(beforeClose.observations[0]?.period.endDate).toBe("2025-07-24");
+    const atClose = await provider.fetch({
+      ...baseRequest,
+      asOf: "2025-07-25T15:30:00+08:00",
+    }, {
+      signal: new AbortController().signal,
+      now: "2026-07-28T10:00:00+08:00",
+      snapshots,
+    });
+    expect(atClose.observations[0]?.period.endDate).toBe("2025-07-25");
   });
 });
