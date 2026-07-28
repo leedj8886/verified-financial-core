@@ -91,6 +91,11 @@ describe("ah-context JSON CLI", () => {
       fiscalQuarter: 3,
       presentation: "ytd",
     });
+    expect(parsePeriod("2026Q2TTM")).toEqual({
+      fiscalYear: 2026,
+      fiscalQuarter: 2,
+      presentation: "ttm",
+    });
   });
 
   it("writes resolution JSON only to stdout", async () => {

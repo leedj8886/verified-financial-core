@@ -34,9 +34,13 @@ import {
   type InstrumentResolution,
   type InstrumentResolver,
 } from "./identity.js";
+import {
+  expandDerivationRequirements,
+  materializeRequestedFacts,
+} from "./derivation-orchestrator.js";
 
 const DEFAULT_SCHEMA_VERSION = "1.0.0";
-const DEFAULT_VALIDATION_RULES_VERSION = "1.0.0";
+const DEFAULT_VALIDATION_RULES_VERSION = "1.1.0";
 
 export class GatewayError extends Error {
   readonly code: "NOT_FOUND" | "INVALID_INPUT" | "STORAGE_ERROR";
@@ -342,6 +346,7 @@ export class FinancialGateway {
 
   private assembleFactSet(
     request: FactRequest,
+    fetchRequirements: readonly FactRequirement[],
     resolution: InstrumentResolution,
     startedAt: string,
     outcomes: readonly ProviderOutcome[],
@@ -351,9 +356,13 @@ export class FinancialGateway {
       outcome.batch === undefined ? [] : [outcome.batch]
     );
     const issues = outcomes.flatMap((outcome) => outcome.issues);
+    const fetchRequest: FactRequest = {
+      ...request,
+      requirements: [...fetchRequirements],
+    };
     const requestedObservations = batches
       .flatMap((batch) => batch.observations)
-      .filter((observation) => matchesRequest(observation, request));
+      .filter((observation) => matchesRequest(observation, fetchRequest));
     const instrumentScopeReasons = requestedObservations
       .filter((observation) =>
         observation.instrumentId !== undefined
@@ -381,9 +390,15 @@ export class FinancialGateway {
       group.push(observation);
       groups.set(key, group);
     }
-    const facts = [...groups.entries()]
+    const baseFacts = [...groups.entries()]
       .sort(([left], [right]) => left.localeCompare(right))
       .map(([, observations]) => verifyAndMaterializeFact(observations));
+    const materialized = materializeRequestedFacts(
+      baseFacts,
+      request.requirements,
+      fetchRequirements,
+    );
+    const facts = materialized.facts;
     const validations = facts.map((fact) => fact.verification);
     const company = chooseCompany(resolution, batches);
     const sameCompanyBatches = batches.filter(
@@ -397,6 +412,7 @@ export class FinancialGateway {
       ...unavailableReasons,
       ...instrumentScopeReasons,
       ...companyConflictReasons,
+      ...materialized.reasonCodes,
       ...extraReasonCodes,
     ];
     const mappingVersions = batches.flatMap(
@@ -532,17 +548,22 @@ export class FinancialGateway {
       return this.replayCachedFactSet(cached, request, []);
     }
 
+    const fetchRequirements = expandDerivationRequirements(
+      request.requirements,
+    );
     const providerPlans = this.providers.flatMap((provider) => {
       const requirements = requirementsForProvider(
         provider,
-        request.requirements,
+        fetchRequirements,
       );
       return requirements.length === 0 ? [] : [{ provider, requirements }];
     });
     const unsupportedReasons = request.requirements
       .filter((requirement) =>
-        !providerPlans.some(({ requirements }) =>
-          requirements.includes(requirement)
+        !this.providers.some((provider) =>
+          provider.capabilities.includes(
+            capabilityForRequirement(requirement),
+          )
         )
       )
       .map((requirement) =>
@@ -561,6 +582,7 @@ export class FinancialGateway {
         }));
     const assembled = this.assembleFactSet(
       request,
+      fetchRequirements,
       resolution,
       startedAt,
       outcomes,

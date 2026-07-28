@@ -24,6 +24,8 @@ Implemented:
 - token-free Eastmoney, Tencent, and Baidu public-data Providers;
 - exact cross-source comparison across different source scales;
 - capability-aware Provider routing and request-level FactSet caching;
+- automatic, traceable FCF, explicit-quarter TTM-flow, and market-cap
+  derivation with direct-source facts taking precedence;
 - offline FactSet replay and stale fallback on upstream failure;
 - Gateway SDK orchestration and A/H instrument syntax resolution;
 - offline-safe `ah-context` JSON CLI;
@@ -78,6 +80,10 @@ pnpm --silent ah-context facts 600519.SH \
   --format json
 ```
 
+Period syntax includes `2025FY`, `2025Q3`, `2025Q3YTD`, `2025TTM`, and the
+explicit-quarter TTM form `2026Q2TTM`. Automatic TTM derivation requires the
+explicit-quarter form.
+
 Use `VERIFIED_FINANCIAL_DATA_DIR` to select the local snapshot and SQLite
 directory. JSON results are written only to stdout; diagnostics are written
 only to stderr. Without `--offline`, `facts` may call the registered public
@@ -98,6 +104,18 @@ replays a matching frozen FactSet when available and marks the result with
 stale fallback is used only when the current request cannot otherwise satisfy
 its required facts.
 
+The Gateway expands derivation dependencies internally without changing the
+request or cache identity. It currently derives:
+
+- free cash flow from operating cash flow minus capex;
+- TTM additive income/cash-flow facts when the fiscal quarter is explicit;
+- market cap from same-period close price and shares outstanding.
+
+Every derived fact records its formula and input Fact/Observation lineage.
+Direct usable facts always take precedence. Missing or incompatible inputs
+fail closed with `DERIVATION_UNAVAILABLE:<concept>`; ROE, EPS-based P/E, and
+other non-additive ratios are intentionally not inferred.
+
 ## Packages
 
 - `@verified-financial/schema`
@@ -113,5 +131,6 @@ its required facts.
 See [the approved architecture](docs/superpowers/specs/2026-07-26-verified-financial-core-design.md)
 and the implementation plans for
 [storage/Gateway](docs/plans/2026-07-27-storage-gateway.md),
-[routing/cache](docs/plans/2026-07-27-gateway-cache-routing.md), and
+[routing/cache](docs/plans/2026-07-27-gateway-cache-routing.md),
+[derivation orchestration](docs/plans/2026-07-28-gateway-derivations.md), and
 [public A/H Providers](docs/plans/2026-07-27-market-providers.md).

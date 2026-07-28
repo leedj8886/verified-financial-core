@@ -50,6 +50,14 @@ export function parsePeriod(value: string): FactPeriodSelector {
       presentation: "annual",
     };
   }
+  const quarterlyTtm = /^(\d{4})Q([1-4])TTM$/i.exec(value);
+  if (quarterlyTtm !== null) {
+    return {
+      fiscalYear: Number(quarterlyTtm[1]),
+      fiscalQuarter: Number(quarterlyTtm[2]) as 1 | 2 | 3 | 4,
+      presentation: "ttm",
+    };
+  }
   const ttm = /^(\d{4})TTM$/i.exec(value);
   if (ttm !== null) {
     return {

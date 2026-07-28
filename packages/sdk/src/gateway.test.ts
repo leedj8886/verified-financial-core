@@ -4,11 +4,17 @@ import { join } from "node:path";
 import {
   ProviderFailure,
   type ProviderBatch,
+  type ProviderCapability,
   type ProviderContext,
   type ProviderRequest,
   type SourceProvider,
 } from "@verified-financial/provider-contract";
-import type { FactRequest } from "@verified-financial/schema";
+import type {
+  AccountingBasis,
+  ConceptId,
+  FactRequest,
+  ReportingPeriod,
+} from "@verified-financial/schema";
 import {
   ContentAddressedSnapshotStore,
   MetadataStore,
@@ -25,6 +31,111 @@ interface FixtureProviderOptions {
   value?: string;
   publishedAt?: string;
   fail?: boolean;
+}
+
+interface DerivationRecord {
+  concept: ConceptId;
+  value: string;
+  unit: string;
+  period: ReportingPeriod;
+  basis: AccountingBasis;
+  instrumentScoped?: boolean;
+}
+
+function makeDerivationProvider(options: {
+  providerId: string;
+  capabilities: ProviderCapability[];
+  records: DerivationRecord[];
+}): {
+  provider: SourceProvider;
+  fetch: ReturnType<typeof vi.fn<SourceProvider["fetch"]>>;
+} {
+  const fetch = vi.fn<SourceProvider["fetch"]>(async (
+    request: ProviderRequest,
+    context: ProviderContext,
+  ): Promise<ProviderBatch> => {
+    const sourceUrl = `https://example.invalid/${options.providerId}`;
+    const snapshot = await context.snapshots.put({
+      providerId: options.providerId,
+      sourceUrl,
+      mediaType: "json",
+      fetchedAt: context.now,
+      body: JSON.stringify({ records: options.records.length }),
+    });
+    const requested = options.records.filter((record) =>
+      request.requirements.some((requirement) =>
+        requirement.conceptId === record.concept
+        && (
+          requirement.period === undefined
+          || (
+            requirement.period.fiscalYear === record.period.fiscalYear
+            && requirement.period.fiscalQuarter
+              === record.period.fiscalQuarter
+            && requirement.period.presentation === record.period.presentation
+          )
+        )
+      )
+    );
+    return {
+      providerId: options.providerId,
+      upstreamSourceId: options.providerId,
+      company: {
+        companyId: request.instrument.companyId,
+        legalName: "Derived Fixture Company",
+        jurisdiction: "CN",
+      },
+      instruments: [request.instrument],
+      observations: requested.map((record, index) => ({
+        observationId: [
+          "obs",
+          options.providerId,
+          record.concept,
+          record.period.fiscalYear,
+          record.period.fiscalQuarter ?? "fy",
+          record.period.presentation,
+          index,
+        ].join(":"),
+        companyId: request.instrument.companyId,
+        ...(record.instrumentScoped === true
+          ? { instrumentId: request.instrument.instrumentId }
+          : {}),
+        concept: record.concept,
+        value: record.value,
+        unit: record.unit,
+        scale: "1",
+        period: record.period,
+        basis: record.basis,
+        availability: {
+          publishedAt: "2026-07-20T18:00:00+08:00",
+          fetchedAt: context.now,
+        },
+        provenance: {
+          providerId: options.providerId,
+          upstreamSourceId: options.providerId,
+          sourceType: "aggregator",
+          sourceUrl,
+          rawSnapshotId: snapshot.snapshotId,
+          rawField: record.concept,
+          extractionMethod: "api",
+          fetchedAt: context.now,
+          transformations: [],
+        },
+      })),
+      unmapped: [],
+      rawSnapshots: [snapshot],
+      mappingVersions: [`${options.providerId}@1`],
+      issues: [],
+    };
+  });
+  return {
+    provider: {
+      providerId: options.providerId,
+      upstreamSourceId: options.providerId,
+      capabilities: options.capabilities,
+      fetch,
+    },
+    fetch,
+  };
 }
 
 function makeProvider(options: FixtureProviderOptions): SourceProvider {
@@ -197,6 +308,320 @@ describe("FinancialGateway", () => {
     expect(marketFetch).not.toHaveBeenCalled();
     expect(factSet.reasonCodes).not.toContain(
       "PROVIDER_FAILURE:market-only:EMPTY_RESPONSE",
+    );
+  });
+
+  it("derives free cash flow from expanded dependencies and preserves lineage", async () => {
+    const basis: AccountingBasis = {
+      standard: "CAS",
+      scope: "consolidated",
+      presentation: "reported",
+      attribution: "parent",
+      currency: "CNY",
+    };
+    const period: ReportingPeriod = {
+      kind: "duration",
+      startDate: "2025-01-01",
+      endDate: "2025-12-31",
+      fiscalYear: 2025,
+      presentation: "annual",
+    };
+    const fixture = makeDerivationProvider({
+      providerId: "financial-derived",
+      capabilities: ["financials"],
+      records: [
+        {
+          concept: "cashFlow.operatingCashFlow",
+          value: "120",
+          unit: "CNY",
+          period,
+          basis,
+        },
+        {
+          concept: "cashFlow.capex",
+          value: "35",
+          unit: "CNY",
+          period,
+          basis,
+        },
+      ],
+    });
+    const { gateway } = await makeGateway([fixture.provider]);
+    const factSet = await gateway.getFacts({
+      instrument: "600519.SH",
+      requirements: [{
+        conceptId: "cashFlow.freeCashFlow",
+        required: true,
+        period: { fiscalYear: 2025, presentation: "annual" },
+      }],
+      asOf: "2026-07-27T23:59:59+08:00",
+    });
+    expect(factSet.facts).toHaveLength(1);
+    expect(factSet.facts[0]).toMatchObject({
+      concept: "cashFlow.freeCashFlow",
+      value: "85",
+      derivation: { formulaId: "fcf.ocf-minus-capex.v1" },
+    });
+    const fetchedConcepts = fixture.fetch.mock.calls[0]?.[0].requirements
+      .map((requirement) => requirement.conceptId);
+    expect(fetchedConcepts).toEqual([
+      "cashFlow.capex",
+      "cashFlow.freeCashFlow",
+      "cashFlow.operatingCashFlow",
+    ]);
+    expect(
+      (await gateway.explainFact(factSet.facts[0]!.factId)).observations,
+    ).toHaveLength(2);
+  });
+
+  it("derives an explicit-quarter TTM flow from YTD and annual facts", async () => {
+    const basis: AccountingBasis = {
+      standard: "CAS",
+      scope: "consolidated",
+      presentation: "reported",
+      attribution: "parent",
+      currency: "CNY",
+    };
+    const fixture = makeDerivationProvider({
+      providerId: "ttm-derived",
+      capabilities: ["financials"],
+      records: [
+        {
+          concept: "income.revenue",
+          value: "80",
+          unit: "CNY",
+          period: {
+            kind: "duration",
+            startDate: "2026-01-01",
+            endDate: "2026-06-30",
+            fiscalYear: 2026,
+            fiscalQuarter: 2,
+            presentation: "ytd",
+          },
+          basis,
+        },
+        {
+          concept: "income.revenue",
+          value: "100",
+          unit: "CNY",
+          period: {
+            kind: "duration",
+            startDate: "2025-01-01",
+            endDate: "2025-12-31",
+            fiscalYear: 2025,
+            presentation: "annual",
+          },
+          basis,
+        },
+        {
+          concept: "income.revenue",
+          value: "70",
+          unit: "CNY",
+          period: {
+            kind: "duration",
+            startDate: "2025-01-01",
+            endDate: "2025-06-30",
+            fiscalYear: 2025,
+            fiscalQuarter: 2,
+            presentation: "ytd",
+          },
+          basis,
+        },
+      ],
+    });
+    const { gateway } = await makeGateway([fixture.provider]);
+    const factSet = await gateway.getFacts({
+      instrument: "600519.SH",
+      requirements: [{
+        conceptId: "income.revenue",
+        required: true,
+        period: {
+          fiscalYear: 2026,
+          fiscalQuarter: 2,
+          presentation: "ttm",
+        },
+      }],
+      asOf: "2026-07-27T23:59:59+08:00",
+    });
+    expect(factSet.facts).toHaveLength(1);
+    expect(factSet.facts[0]).toMatchObject({
+      concept: "income.revenue",
+      value: "110",
+      period: {
+        startDate: "2025-07-01",
+        endDate: "2026-06-30",
+        fiscalYear: 2026,
+        fiscalQuarter: 2,
+        presentation: "ttm",
+      },
+      derivation: { formulaId: "ttm.flow.v1" },
+    });
+  });
+
+  it("composes TTM flow derivations before deriving free cash flow", async () => {
+    const basis: AccountingBasis = {
+      standard: "CAS",
+      scope: "consolidated",
+      presentation: "reported",
+      attribution: "parent",
+      currency: "CNY",
+    };
+    const periods: ReportingPeriod[] = [
+      {
+        kind: "duration",
+        startDate: "2026-01-01",
+        endDate: "2026-06-30",
+        fiscalYear: 2026,
+        fiscalQuarter: 2,
+        presentation: "ytd",
+      },
+      {
+        kind: "duration",
+        startDate: "2025-01-01",
+        endDate: "2025-12-31",
+        fiscalYear: 2025,
+        presentation: "annual",
+      },
+      {
+        kind: "duration",
+        startDate: "2025-01-01",
+        endDate: "2025-06-30",
+        fiscalYear: 2025,
+        fiscalQuarter: 2,
+        presentation: "ytd",
+      },
+    ];
+    const series: Array<{ concept: ConceptId; values: string[] }> = [
+      {
+        concept: "cashFlow.operatingCashFlow",
+        values: ["80", "100", "70"],
+      },
+      {
+        concept: "cashFlow.capex",
+        values: ["30", "40", "20"],
+      },
+    ];
+    const fixture = makeDerivationProvider({
+      providerId: "fcf-ttm-derived",
+      capabilities: ["financials"],
+      records: series.flatMap(({ concept, values }) =>
+        periods.map((period, index) => ({
+          concept,
+          value: values[index]!,
+          unit: "CNY",
+          period,
+          basis,
+        }))
+      ),
+    });
+    const { gateway } = await makeGateway([fixture.provider]);
+    const factSet = await gateway.getFacts({
+      instrument: "600519.SH",
+      requirements: [{
+        conceptId: "cashFlow.freeCashFlow",
+        required: true,
+        period: {
+          fiscalYear: 2026,
+          fiscalQuarter: 2,
+          presentation: "ttm",
+        },
+      }],
+      asOf: "2026-07-27T23:59:59+08:00",
+    });
+    expect(factSet.facts[0]).toMatchObject({
+      concept: "cashFlow.freeCashFlow",
+      value: "60",
+      derivation: {
+        formulaId: "fcf.ocf-minus-capex.v1",
+      },
+    });
+    expect(
+      (await gateway.explainFact(factSet.facts[0]!.factId)).observations,
+    ).toHaveLength(6);
+  });
+
+  it("derives market cap from price and shares and caches the result", async () => {
+    const basis: AccountingBasis = {
+      standard: "OTHER",
+      scope: "standalone",
+      presentation: "reported",
+      attribution: "all-shareholders",
+      currency: "CNY",
+    };
+    const period: ReportingPeriod = {
+      kind: "instant",
+      endDate: "2026-07-27",
+      fiscalYear: 2026,
+      fiscalQuarter: 3,
+      presentation: "quarter",
+    };
+    const fixture = makeDerivationProvider({
+      providerId: "market-derived",
+      capabilities: ["market"],
+      records: [
+        {
+          concept: "market.price.close",
+          value: "20",
+          unit: "CNY",
+          period,
+          basis,
+          instrumentScoped: true,
+        },
+        {
+          concept: "market.shares.outstanding",
+          value: "1000",
+          unit: "shares",
+          period,
+          basis,
+          instrumentScoped: true,
+        },
+      ],
+    });
+    const { gateway } = await makeGateway([fixture.provider]);
+    const marketRequest: FactRequest = {
+      instrument: "600519.SH",
+      requirements: [{
+        conceptId: "market.cap",
+        required: true,
+        period: {
+          fiscalYear: 2026,
+          fiscalQuarter: 3,
+          presentation: "quarter",
+        },
+      }],
+      asOf: "2026-07-27T23:59:59+08:00",
+    };
+    const first = await gateway.getFacts(marketRequest);
+    const second = await gateway.getFacts(marketRequest);
+    expect(first.facts[0]).toMatchObject({
+      concept: "market.cap",
+      value: "20000",
+      derivation: { formulaId: "market-cap.price-times-shares.v1" },
+    });
+    expect(second.factSetId).toBe(first.factSetId);
+    expect(fixture.fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails closed when a TTM request has no explicit quarter", async () => {
+    const fixture = makeDerivationProvider({
+      providerId: "ttm-missing-quarter",
+      capabilities: ["financials"],
+      records: [],
+    });
+    const { gateway } = await makeGateway([fixture.provider]);
+    const factSet = await gateway.getFacts({
+      instrument: "600519.SH",
+      requirements: [{
+        conceptId: "income.revenue",
+        required: true,
+        period: { fiscalYear: 2026, presentation: "ttm" },
+      }],
+      asOf: "2026-07-27T23:59:59+08:00",
+    });
+    expect(factSet.facts).toEqual([]);
+    expect(factSet.summary.overallStatus).toBe("failed");
+    expect(factSet.reasonCodes).toContain(
+      "DERIVATION_UNAVAILABLE:income.revenue",
     );
   });
 
