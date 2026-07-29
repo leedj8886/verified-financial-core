@@ -120,6 +120,24 @@ try {
 The shared runtime owns the default Provider registration and local snapshot
 stores. Client adapters must not recreate that data-routing layer.
 
+Dexter and other LLM clients convert the complete FactSet through the shared
+fail-closed adapter:
+
+```ts
+import {
+  buildClientFinancialContext,
+} from "@verified-financial/client-context";
+
+const context = buildClientFinancialContext(factSet, {
+  minimumStatus: "verified",
+});
+```
+
+Facts below the declared threshold are moved to `blockedFacts` without their
+numeric value. Consumers must honor `gate.passed` before publishing or making
+an investment claim. See the
+[Client Financial Context 1.0.0 contract](docs/contracts/client-context-1.0.0.md).
+
 Request facts:
 
 ```bash
