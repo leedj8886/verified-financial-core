@@ -134,6 +134,80 @@ describe("CninfoProvider", () => {
     )).toBe(true);
   });
 
+  it("aggregates implemented official dividends and excludes ambiguous records", async () => {
+    const fetchImplementation = vi.fn<FetchImplementation>(
+      async (input, init) => {
+        const url = new URL(String(input));
+        if (url.pathname.endsWith("/information/topSearch/query")) {
+          return new Response(await fixture("search-600519.json"));
+        }
+        if (url.pathname.endsWith("/api/sysapi/p_sysapi1139")) {
+          expect(init?.method).toBe("POST");
+          expect(url.searchParams.get("scode")).toBe("600519");
+          const token = new Headers(init?.headers).get("Accept-Enckey");
+          expect(token).toMatch(/^[A-Za-z0-9+/]+={0,2}$/);
+          return new Response(await fixture("dividend-600519.json"));
+        }
+        return new Response("not found", { status: 404 });
+      },
+    );
+    const provider = new CninfoProvider({
+      fetchImplementation,
+      webapiBase: "https://webapi.cninfo.example/",
+      retries: 0,
+    });
+    const batch = parseProviderBatch(provider, await provider.fetch({
+      ...request,
+      requirements: [{
+        conceptId: "distribution.dividendPerShare",
+        required: true,
+        period: { fiscalYear: 2024, presentation: "annual" },
+      }],
+      asOf: "2025-06-21T23:59:59+08:00",
+    }, {
+      signal: new AbortController().signal,
+      now: "2025-06-21T10:00:00+08:00",
+      snapshots,
+    }));
+
+    expect(batch.company.legalName).toBe("贵州茅台");
+    expect(batch.issues).toEqual([]);
+    expect(batch.rawSnapshots.map((snapshot) => snapshot.mediaType))
+      .toEqual(["json", "json"]);
+    expect(batch.observations).toEqual([
+      expect.objectContaining({
+        concept: "distribution.dividendPerShare",
+        value: "515.55",
+        unit: "CNY-per-share",
+        scale: "0.1",
+        period: {
+          kind: "duration",
+          startDate: "2024-01-01",
+          endDate: "2024-12-31",
+          fiscalYear: 2024,
+          presentation: "annual",
+        },
+        availability: expect.objectContaining({
+          filingDate: "2025-06-20",
+          publishedAt: "2025-06-20T23:59:59+08:00",
+        }),
+        provenance: expect.objectContaining({
+          sourceType: "official",
+          extractionMethod: "api",
+          rawField: "records[].F012N",
+          transformations: expect.arrayContaining([
+            expect.objectContaining({ transformId: "per-ten-shares" }),
+            expect.objectContaining({
+              transformId: "aggregate-annual-cash-dividends",
+              detail:
+                "Sum 2 implemented cash distribution(s) assigned to fiscal year 2024",
+            }),
+          ]),
+        }),
+      }),
+    ]);
+  });
+
   it("fails closed before end-of-day availability and never downloads the PDF", async () => {
     const fetchImplementation = vi.fn<FetchImplementation>(
       async (input) => {

@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createCipheriv, createHash } from "node:crypto";
 import {
   fetchBytes,
   ProviderFailure,
@@ -21,13 +21,16 @@ import {
   type ReportingPeriod,
   type UnmappedObservation,
 } from "@verified-financial/schema";
+import { Decimal } from "decimal.js";
 import { extractText, getDocumentProxy } from "unpdf";
 
 const PROVIDER_ID = "cninfo-direct";
 const UPSTREAM_SOURCE_ID = "cninfo";
-const MAPPING_VERSION = "cninfo@1.0.0";
+const MAPPING_VERSION = "cninfo@1.1.0";
 const API_BASE = "https://www.cninfo.com.cn/new/";
+const WEBAPI_BASE = "https://webapi.cninfo.com.cn/";
 const PDF_BASE = "https://static.cninfo.com.cn/";
+const WEBAPI_CIPHER_KEY = "1234567887654321";
 const USER_AGENT =
   "verified-financial-core/0.1 (+https://github.com/leedj8886/verified-financial-core)";
 
@@ -50,6 +53,20 @@ interface Announcement {
   announcementTime: number;
   adjunctUrl: string;
   adjunctType: string;
+}
+
+interface DividendComponent {
+  fiscalYear: number;
+  value: string;
+  availableDate: string;
+  identity: string;
+}
+
+interface AnnualDividend {
+  fiscalYear: number;
+  value: string;
+  availableDate: string;
+  identities: string[];
 }
 
 type StatementKind = "balance" | "income" | "cashFlow";
@@ -81,6 +98,7 @@ export interface CninfoProviderOptions {
   retries?: number;
   timeoutMs?: number;
   apiBase?: string;
+  webapiBase?: string;
   pdfBase?: string;
 }
 
@@ -172,15 +190,28 @@ const fieldDefinitions: readonly FieldDefinition[] = [
   },
 ] as const;
 
-export const CNINFO_FIELD_MAPPINGS: readonly SourceFieldMapping[] =
-  fieldDefinitions.map((field) => ({
+export const CNINFO_FIELD_MAPPINGS: readonly SourceFieldMapping[] = [
+  {
+    upstreamSchema: "p_sysapi1139",
+    rawField: "records[].F012N",
+    conceptId: "distribution.dividendPerShare",
+    unit: "currency-per-share",
+    scale: "0.1",
+    transformIds: [
+      "per-ten-shares",
+      "aggregate-annual-cash-dividends",
+      "implementation-date-end-of-day",
+    ],
+  },
+  ...fieldDefinitions.map((field) => ({
     upstreamSchema: "cninfo.periodic-report.pdf",
     rawField: field.rawField,
     conceptId: field.concept,
     unit: "currency",
     scale: "1",
     transformIds: ["pdf-text-extract", "consolidated-statement-label-match"],
-  }));
+  })),
+];
 
 const definitionsByConcept = new Map(
   fieldDefinitions.map((field) => [field.concept, field]),
@@ -225,6 +256,22 @@ function asNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value)
     ? value
     : undefined;
+}
+
+function exactDecimal(value: unknown): string | undefined {
+  if (
+    typeof value === "number"
+    && Number.isFinite(value)
+  ) {
+    return String(value);
+  }
+  if (
+    typeof value === "string"
+    && /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(value)
+  ) {
+    return value;
+  }
+  return undefined;
 }
 
 function parseSearchResults(value: unknown): SearchResult[] {
@@ -299,6 +346,135 @@ function chinaDate(value: string | number): string {
 
 function publishedAtEndOfDay(announcementTime: number): string {
   return `${chinaDate(announcementTime)}T23:59:59+08:00`;
+}
+
+function isoDate(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const normalized = value.slice(0, 10).replaceAll("/", "-");
+  return /^\d{4}-\d{2}-\d{2}$/.test(normalized)
+    ? normalized
+    : undefined;
+}
+
+function dividendFiscalYear(reportLabel: unknown): number | undefined {
+  if (typeof reportLabel !== "string") return undefined;
+  const match =
+    /^(\d{4})(?:年报|三季报|中报|半年报|一季报|一季度报|半年度报告|年度报告)$/
+      .exec(reportLabel.trim());
+  if (match?.[1] === undefined) return undefined;
+  const fiscalYear = Number(match[1]);
+  return Number.isInteger(fiscalYear) ? fiscalYear : undefined;
+}
+
+function dividendPeriod(fiscalYear: number): ReportingPeriod {
+  return {
+    kind: "duration",
+    startDate: `${fiscalYear}-01-01`,
+    endDate: `${fiscalYear}-12-31`,
+    fiscalYear,
+    presentation: "annual",
+  };
+}
+
+function requestedDividendYears(
+  requirements: readonly FactRequirement[],
+): ReadonlySet<number> | undefined {
+  const dividends = requirements.filter((requirement) =>
+    requirement.conceptId === "distribution.dividendPerShare"
+  );
+  if (dividends.some((requirement) => requirement.period === undefined)) {
+    return undefined;
+  }
+  return new Set(dividends.flatMap((requirement) =>
+    requirement.period === undefined ? [] : [requirement.period.fiscalYear]
+  ));
+}
+
+function parseDividendComponents(value: unknown): DividendComponent[] {
+  const object = asObject(value, "CNINFO dividend response is invalid");
+  if (object["resultcode"] !== 200) {
+    throw new Error(
+      asString(object["resultmsg"]) ?? "CNINFO dividend request failed",
+    );
+  }
+  const records = object["records"];
+  if (!Array.isArray(records)) {
+    throw new Error("CNINFO dividend records are invalid");
+  }
+  return records.flatMap((item): DividendComponent[] => {
+    const record = asObject(item, "CNINFO dividend record is invalid");
+    const fiscalYear = dividendFiscalYear(record["F001V"]);
+    const value = exactDecimal(record["F012N"]);
+    const availableDate = isoDate(record["F006D"]);
+    const lifecycleDates = [
+      isoDate(record["F018D"]),
+      isoDate(record["F020D"]),
+      isoDate(record["F023D"]),
+    ];
+    if (
+      fiscalYear === undefined
+      || value === undefined
+      || availableDate === undefined
+      || lifecycleDates.every((date) => date === undefined)
+      || new Decimal(value).lte(0)
+    ) {
+      return [];
+    }
+    return [{
+      fiscalYear,
+      value,
+      availableDate,
+      identity: JSON.stringify({
+        reportLabel: record["F001V"],
+        dividendType: record["F044V"],
+      }),
+    }];
+  });
+}
+
+function aggregateAnnualDividends(
+  components: readonly DividendComponent[],
+): AnnualDividend[] {
+  const unique = new Map<string, DividendComponent>();
+  for (const component of components) {
+    const existing = unique.get(component.identity);
+    if (
+      existing === undefined
+      || component.availableDate > existing.availableDate
+    ) {
+      unique.set(component.identity, component);
+    }
+  }
+  const groups = new Map<number, DividendComponent[]>();
+  for (const component of unique.values()) {
+    const group = groups.get(component.fiscalYear) ?? [];
+    group.push(component);
+    groups.set(component.fiscalYear, group);
+  }
+  return [...groups.entries()].map(([fiscalYear, group]) => ({
+    fiscalYear,
+    value: group.reduce(
+      (total, component) => total.plus(component.value),
+      new Decimal(0),
+    ).toString(),
+    availableDate: group
+      .map((component) => component.availableDate)
+      .sort()
+      .at(-1)!,
+    identities: group.map((component) => component.identity).sort(),
+  })).sort((left, right) => right.fiscalYear - left.fiscalYear);
+}
+
+function acceptEnckey(now: string): string {
+  const key = Buffer.from(WEBAPI_CIPHER_KEY, "utf8");
+  const cipher = createCipheriv("aes-128-cbc", key, key);
+  return Buffer.concat([
+    cipher.update(
+      String(Math.floor(Date.parse(now) / 1000)),
+      "utf8",
+    ),
+    cipher.final(),
+  ]).toString("base64");
 }
 
 function reportQuery(
@@ -455,11 +631,16 @@ async function defaultExtractText(
 export class CninfoProvider implements SourceProvider {
   readonly providerId = PROVIDER_ID;
   readonly upstreamSourceId = UPSTREAM_SOURCE_ID;
-  readonly capabilities = ["financials", "filings"] as const;
+  readonly capabilities = ["financials", "filings", "dividends"] as const;
   private readonly options: CninfoProviderOptions;
 
   constructor(options: CninfoProviderOptions = {}) {
     this.options = options;
+  }
+
+  supportsInstrument(instrument: ProviderRequest["instrument"]): boolean {
+    return instrument.exchangeMic === "XSHG"
+      || instrument.exchangeMic === "XSHE";
   }
 
   private apiUrl(path: string): string {
@@ -468,6 +649,10 @@ export class CninfoProvider implements SourceProvider {
 
   private pdfUrl(path: string): string {
     return new URL(path, this.options.pdfBase ?? PDF_BASE).toString();
+  }
+
+  private webapiUrl(path: string): string {
+    return new URL(path, this.options.webapiBase ?? WEBAPI_BASE).toString();
   }
 
   private async requestJson(
@@ -544,6 +729,56 @@ export class CninfoProvider implements SourceProvider {
       });
     }
     return { result, snapshot };
+  }
+
+  private async requestDividends(
+    request: ProviderRequest,
+    context: ProviderContext,
+  ): Promise<{ parsed: unknown; snapshot: StoredSnapshotRef; sourceUrl: string }> {
+    const sourceUrl = this.webapiUrl(
+      `api/sysapi/p_sysapi1139?scode=${encodeURIComponent(request.instrument.symbol)}`,
+    );
+    const bytes = await fetchBytes(sourceUrl, {
+      providerId: this.providerId,
+      signal: context.signal,
+      ...(this.options.fetchImplementation === undefined
+        ? {}
+        : { fetchImplementation: this.options.fetchImplementation }),
+      headers: {
+        Accept: "application/json, text/plain, */*",
+        "Accept-Enckey": acceptEnckey(context.now),
+        Origin: new URL(sourceUrl).origin,
+        Referer: new URL("/", sourceUrl).toString(),
+        "User-Agent": USER_AGENT,
+        "X-Requested-With": "XMLHttpRequest",
+      },
+      method: "POST",
+      retries: this.options.retries ?? 2,
+      timeoutMs: this.options.timeoutMs ?? 10_000,
+    });
+    const snapshot = await context.snapshots.put({
+      providerId: this.providerId,
+      sourceUrl,
+      mediaType: "json",
+      fetchedAt: context.now,
+      body: bytes,
+    });
+    try {
+      return {
+        parsed: JSON.parse(new TextDecoder().decode(bytes)),
+        snapshot,
+        sourceUrl,
+      };
+    } catch (error) {
+      throw new ProviderFailure({
+        providerId: this.providerId,
+        code: "UPSTREAM_SCHEMA_CHANGED",
+        message: error instanceof Error
+          ? `CNINFO returned invalid dividend JSON: ${error.message}`
+          : "CNINFO returned invalid dividend JSON",
+        retryable: false,
+      });
+    }
   }
 
   private async findAnnouncement(
@@ -687,7 +922,10 @@ export class CninfoProvider implements SourceProvider {
     }
 
     const queries = groupRequirements(request.requirements);
-    if (queries.length === 0) {
+    const requestsDividends = request.requirements.some((requirement) =>
+      requirement.conceptId === "distribution.dividendPerShare"
+    );
+    if (queries.length === 0 && !requestsDividends) {
       issues.push({
         providerId: this.providerId,
         code: "EMPTY_RESPONSE",
@@ -714,6 +952,104 @@ export class CninfoProvider implements SourceProvider {
             retryable: false,
           });
       return buildBatch();
+    }
+
+    if (requestsDividends) {
+      try {
+        const response = await this.requestDividends(request, context);
+        rawSnapshots.push(response.snapshot);
+        const requestedYears = requestedDividendYears(request.requirements);
+        const dividends = aggregateAnnualDividends(
+          parseDividendComponents(response.parsed),
+        ).filter((dividend) =>
+          requestedYears === undefined
+          || requestedYears.has(dividend.fiscalYear)
+        );
+        if (dividends.length === 0) {
+          throw new ProviderFailure({
+            providerId: this.providerId,
+            code: "EMPTY_RESPONSE",
+            message:
+              "CNINFO has no implemented annual cash dividend for the request",
+            retryable: false,
+          });
+        }
+        for (const dividend of dividends) {
+          const period = dividendPeriod(dividend.fiscalYear);
+          const publishedAt = `${dividend.availableDate}T23:59:59+08:00`;
+          observations.push(ObservationSchema.parse({
+            observationId: stableId("obs", {
+              providerId: this.providerId,
+              snapshotId: response.snapshot.snapshotId,
+              rawField: "records[].F012N",
+              concept: "distribution.dividendPerShare",
+              period,
+              identities: dividend.identities,
+            }),
+            companyId: request.instrument.companyId,
+            instrumentId: request.instrument.instrumentId,
+            concept: "distribution.dividendPerShare",
+            value: dividend.value,
+            unit: "CNY-per-share",
+            scale: "0.1",
+            period,
+            basis: {
+              standard: "OTHER",
+              scope: "standalone",
+              presentation: "reported",
+              attribution: "all-shareholders",
+              currency: "CNY",
+            },
+            availability: {
+              filingDate: dividend.availableDate,
+              publishedAt,
+              sourceAsOf: publishedAt,
+              fetchedAt: context.now,
+            },
+            provenance: {
+              providerId: this.providerId,
+              upstreamSourceId: this.upstreamSourceId,
+              sourceType: "official",
+              sourceUrl: response.sourceUrl,
+              rawSnapshotId: response.snapshot.snapshotId,
+              rawField: "records[].F012N",
+              extractionMethod: "api",
+              fetchedAt: context.now,
+              transformations: [
+                {
+                  transformId: "per-ten-shares",
+                  version: "1.0.0",
+                  detail:
+                    "Scale F012N from cash per 10 shares to cash per share",
+                },
+                {
+                  transformId: "aggregate-annual-cash-dividends",
+                  version: "1.0.0",
+                  detail:
+                    `Sum ${dividend.identities.length} implemented cash distribution(s) assigned to fiscal year ${dividend.fiscalYear}`,
+                },
+                {
+                  transformId: "implementation-date-end-of-day",
+                  version: "1.0.0",
+                  detail:
+                    "Treat the latest implementation announcement date F006D as available at end of day",
+                },
+              ],
+            },
+          }));
+        }
+      } catch (error) {
+        issues.push(error instanceof ProviderFailure
+          ? error.issue
+          : {
+              providerId: this.providerId,
+              code: "PARSE_FAILED",
+              message: error instanceof Error
+                ? error.message
+                : "Failed to parse CNINFO dividends",
+              retryable: false,
+            });
+      }
     }
 
     for (const query of queries) {

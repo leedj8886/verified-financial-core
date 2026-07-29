@@ -175,6 +175,7 @@ export interface SourceProvider {
   readonly providerId: string;
   readonly upstreamSourceId: string;
   readonly capabilities: readonly ProviderCapability[];
+  supportsInstrument?(instrument: Instrument): boolean;
   fetch(
     request: ProviderRequest,
     context: ProviderContext,

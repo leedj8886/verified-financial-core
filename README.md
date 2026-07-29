@@ -25,8 +25,8 @@ Implemented:
   Providers;
 - traceable, unadjusted Tencent/Eastmoney daily closes for historical `asOf`
   queries;
-- annual A/H cash dividends per share with explicit aggregation, currency,
-  scale, and conservative availability;
+- annual A/H cash dividends per share with official CNINFO/HKEX arbitration,
+  explicit aggregation, currency, scale, and conservative availability;
 - exact cross-source comparison across different source scales;
 - capability-aware Provider routing and request-level FactSet caching;
 - automatic, traceable FCF, explicit-quarter TTM-flow, and market-cap
@@ -38,15 +38,17 @@ Implemented:
 
 The local Gateway registers five token-free Providers by default. CNINFO
 resolves A-share issuers and HKEX resolves H-share issuers; both discover
-periodic filings, snapshot the official PDF, and extract a constrained set of
-consolidated financial facts. Eastmoney supplies A/H quotes and A-share
-statements; Tencent and Baidu independently cross-check market and valuation
-fields. Official facts adjudicate compatible conflicts through the same
-verification core. HKEX preserves the statement currency and reported scale
-and uses the exchange's exact release minute for historical `asOf` filtering.
-H-share statements remain `warning` when HKEX is the only independent source.
-Tushare remains optional and the default runtime and test suite require no
-token or interface ledger.
+periodic filings, snapshot official evidence, and extract a constrained set of
+financial facts. CNINFO's official implementation ledger and HKEX's EF001
+cash-dividend announcements arbitrate Eastmoney's A/H dividend observations.
+Eastmoney also supplies A/H quotes and A-share statements; Tencent and Baidu
+independently cross-check market and valuation fields. Official facts
+adjudicate compatible conflicts through the same verification core. HKEX
+preserves the statement currency and reported scale and uses the exchange's
+exact release minute for historical `asOf` filtering. H-share statements
+remain `warning` when HKEX is the only independent source. Tushare remains
+optional and the default runtime and test suite require no token or interface
+ledger.
 
 ## Requirements
 
@@ -117,7 +119,10 @@ pnpm --silent ah-context facts 600519.SH \
 For A shares, multiple implemented distributions in the same fiscal year are
 summed and source amounts reported per 10 shares retain scale `0.1`. Hong Kong
 cash distributions preserve the currency stated in the source. Proposals
-without an amount and non-cash special distributions are excluded.
+without an amount and non-cash special distributions are excluded. CNINFO
+official implementation announcements and HKEX official cash-dividend forms
+cross-check the aggregator result; HKEX final dividends remain unavailable
+until shareholder approval when that date is stated.
 
 Period syntax includes `2025FY`, `2025Q3`, `2025Q3YTD`, `2025TTM`, and the
 explicit-quarter TTM form `2026Q2TTM`. Automatic TTM derivation requires the

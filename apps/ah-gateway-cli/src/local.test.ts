@@ -12,10 +12,18 @@ describe("local Gateway providers", () => {
         "tencent-direct",
         "baidu-direct",
       ]);
-    expect(
-      providers.find((provider) =>
-        provider.providerId === "eastmoney-direct"
-      )?.capabilities,
-    ).toContain("dividends");
+    for (
+      const providerId of [
+        "eastmoney-direct",
+        "cninfo-direct",
+        "hkex-direct",
+      ]
+    ) {
+      expect(
+        providers.find((provider) =>
+          provider.providerId === providerId
+        )?.capabilities,
+      ).toContain("dividends");
+    }
   });
 });

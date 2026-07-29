@@ -26,7 +26,7 @@ import { extractText, getDocumentProxy } from "unpdf";
 
 const PROVIDER_ID = "hkex-direct";
 const UPSTREAM_SOURCE_ID = "hkex";
-const MAPPING_VERSION = "hkex@1.0.0";
+const MAPPING_VERSION = "hkex@1.1.0";
 const BASE_URL = "https://www1.hkexnews.hk/";
 const USER_AGENT =
   "verified-financial-core/0.1 (+https://github.com/leedj8886/verified-financial-core)";
@@ -60,6 +60,24 @@ interface FilingQuery {
   resultKeyword: string;
   reportLabel: string;
   requirements: FactRequirement[];
+}
+
+interface DividendComponent {
+  fiscalYear: number;
+  currency: string;
+  value: string;
+  availableAt: string;
+  filing: Filing;
+  snapshot: StoredSnapshotRef;
+  sourceUrl: string;
+}
+
+interface AnnualDividend {
+  fiscalYear: number;
+  currency: string;
+  value: string;
+  availableAt: string;
+  components: DividendComponent[];
 }
 
 interface FieldDefinition {
@@ -153,8 +171,21 @@ const fieldDefinitions: readonly FieldDefinition[] = [
   },
 ] as const;
 
-export const HKEX_FIELD_MAPPINGS: readonly SourceFieldMapping[] =
-  fieldDefinitions.map((field) => ({
+export const HKEX_FIELD_MAPPINGS: readonly SourceFieldMapping[] = [
+  {
+    upstreamSchema: "hkex.cash-dividend-announcement.pdf",
+    rawField: "Dividend declared",
+    conceptId: "distribution.dividendPerShare",
+    unit: "currency-per-share",
+    scale: "1",
+    transformIds: [
+      "pdf-text-extract",
+      "parse-cash-dividend-per-share",
+      "aggregate-annual-cash-dividends",
+      "shareholder-approval-availability",
+    ],
+  },
+  ...fieldDefinitions.map((field) => ({
     upstreamSchema: "hkex.periodic-report.pdf",
     rawField: field.rawField,
     conceptId: field.concept,
@@ -168,7 +199,8 @@ export const HKEX_FIELD_MAPPINGS: readonly SourceFieldMapping[] =
         ? ["sum-capex-components"]
         : []),
     ],
-  }));
+  })),
+];
 
 const definitionsByConcept = new Map(
   fieldDefinitions.map((field) => [field.concept, field]),
@@ -293,6 +325,151 @@ function publishedAt(dateTime: string): string {
     /^(\d{2})\/(\d{2})\/(\d{4})\s+(\d{2}):(\d{2})$/.exec(dateTime);
   if (match === null) throw new Error(`Invalid HKEX release time: ${dateTime}`);
   return `${match[3]}-${match[2]}-${match[1]}T${match[4]}:${match[5]}:00+08:00`;
+}
+
+function englishDate(
+  day: string,
+  monthName: string,
+  year: string,
+): string | undefined {
+  const month = {
+    january: "01",
+    february: "02",
+    march: "03",
+    april: "04",
+    may: "05",
+    june: "06",
+    july: "07",
+    august: "08",
+    september: "09",
+    october: "10",
+    november: "11",
+    december: "12",
+  }[monthName.toLowerCase()];
+  if (month === undefined) return undefined;
+  const normalizedDay = day.padStart(2, "0");
+  return /^\d{4}$/.test(year) && /^(?:0[1-9]|[12]\d|3[01])$/.test(normalizedDay)
+    ? `${year}-${month}-${normalizedDay}`
+    : undefined;
+}
+
+function requestedDividendYears(
+  requirements: readonly FactRequirement[],
+): ReadonlySet<number> | undefined {
+  const dividends = requirements.filter((requirement) =>
+    requirement.conceptId === "distribution.dividendPerShare"
+  );
+  if (dividends.some((requirement) => requirement.period === undefined)) {
+    return undefined;
+  }
+  return new Set(dividends.flatMap((requirement) =>
+    requirement.period === undefined ? [] : [requirement.period.fiscalYear]
+  ));
+}
+
+function dividendPeriod(fiscalYear: number): ReportingPeriod {
+  return {
+    kind: "duration",
+    startDate: `${fiscalYear}-01-01`,
+    endDate: `${fiscalYear}-12-31`,
+    fiscalYear,
+    presentation: "annual",
+  };
+}
+
+function extractDividend(
+  pages: readonly string[],
+  filing: Filing,
+  snapshot: StoredSnapshotRef,
+  sourceUrl: string,
+): DividendComponent | undefined {
+  const text = normalizeLine(pages.join(" "));
+  if (!/Cash Dividend Announcement for Equity Issuer/i.test(text)) {
+    return undefined;
+  }
+  const fiscalEnd =
+    /For the financial year end\s+(\d{1,2})\s+([A-Za-z]+)\s+(\d{4})/i
+      .exec(text);
+  const declared =
+    /Dividend declared\s+([A-Z]{3})\s+([+-]?(?:\d+(?:\.\d*)?|\.\d+))\s+per share/i
+      .exec(text);
+  if (
+    fiscalEnd?.[1] === undefined
+    || fiscalEnd[2] === undefined
+    || fiscalEnd[3] === undefined
+    || declared?.[1] === undefined
+    || declared[2] === undefined
+  ) {
+    return undefined;
+  }
+  const fiscalEndDate = englishDate(
+    fiscalEnd[1],
+    fiscalEnd[2],
+    fiscalEnd[3],
+  );
+  if (fiscalEndDate !== `${fiscalEnd[3]}-12-31`) {
+    return undefined;
+  }
+  const approval =
+    /Date of shareholders?' approval\s+(\d{1,2})\s+([A-Za-z]+)\s+(\d{4})/i
+      .exec(text);
+  const approvalDate = approval?.[1] !== undefined
+      && approval[2] !== undefined
+      && approval[3] !== undefined
+    ? englishDate(approval[1], approval[2], approval[3])
+    : undefined;
+  const releasedAt = publishedAt(filing.dateTime);
+  const approvedAt = approvalDate === undefined
+    ? undefined
+    : `${approvalDate}T23:59:59+08:00`;
+  const availableAt = approvedAt !== undefined && approvedAt > releasedAt
+    ? approvedAt
+    : releasedAt;
+  return {
+    fiscalYear: Number(fiscalEnd[3]),
+    currency: declared[1].toUpperCase(),
+    value: declared[2],
+    availableAt,
+    filing,
+    snapshot,
+    sourceUrl,
+  };
+}
+
+function aggregateAnnualDividends(
+  components: readonly DividendComponent[],
+): AnnualDividend[] {
+  const unique = new Map<string, DividendComponent>();
+  for (const component of components) {
+    unique.set(component.filing.newsId, component);
+  }
+  const groups = new Map<string, DividendComponent[]>();
+  for (const component of unique.values()) {
+    const key = `${component.fiscalYear}:${component.currency}`;
+    const group = groups.get(key) ?? [];
+    group.push(component);
+    groups.set(key, group);
+  }
+  return [...groups.values()].map((group) => {
+    const ordered = group.sort((left, right) =>
+      left.availableAt.localeCompare(right.availableAt)
+      || left.filing.newsId.localeCompare(right.filing.newsId)
+    );
+    const first = ordered[0]!;
+    return {
+      fiscalYear: first.fiscalYear,
+      currency: first.currency,
+      value: ordered.reduce(
+        (total, component) => total.plus(component.value),
+        new Decimal(0),
+      ).toString(),
+      availableAt: ordered.at(-1)!.availableAt,
+      components: ordered,
+    };
+  }).sort((left, right) =>
+    right.fiscalYear - left.fiscalYear
+    || left.currency.localeCompare(right.currency)
+  );
 }
 
 function reportQuery(
@@ -619,11 +796,15 @@ async function defaultExtractText(
 export class HkexProvider implements SourceProvider {
   readonly providerId = PROVIDER_ID;
   readonly upstreamSourceId = UPSTREAM_SOURCE_ID;
-  readonly capabilities = ["financials", "filings"] as const;
+  readonly capabilities = ["financials", "filings", "dividends"] as const;
   private readonly options: HkexProviderOptions;
 
   constructor(options: HkexProviderOptions = {}) {
     this.options = options;
+  }
+
+  supportsInstrument(instrument: ProviderRequest["instrument"]): boolean {
+    return instrument.exchangeMic === "XHKG";
   }
 
   private url(path: string, parameters?: URLSearchParams): string {
@@ -778,6 +959,75 @@ export class HkexProvider implements SourceProvider {
     };
   }
 
+  private async findDividendFilings(
+    request: ProviderRequest,
+    stockId: number,
+    context: ProviderContext,
+  ): Promise<{ filings: Filing[]; snapshot: StoredSnapshotRef }> {
+    const requestedYears = requestedDividendYears(request.requirements);
+    const asOfYear = Number(hongKongDate(request.asOf).slice(0, 4));
+    const fromYear = requestedYears === undefined
+      ? Math.max(1990, asOfYear - 10)
+      : Math.min(...requestedYears);
+    const sourceUrl = this.url(
+      "search/titleSearchServlet.do",
+      new URLSearchParams({
+        sortDir: "0",
+        sortByOptions: "DateTime",
+        category: "0",
+        market: "SEHK",
+        stockId: String(stockId),
+        documentType: "-1",
+        fromDate: `${fromYear}0101`,
+        toDate: compactDate(hongKongDate(request.asOf)),
+        title: "dividend",
+        searchType: "0",
+        t1code: "-2",
+        t2Gcode: "-2",
+        t2code: "-2",
+        rowRange: "100",
+        lang: "EN",
+      }),
+    );
+    const { text, snapshot } = await this.requestText(
+      sourceUrl,
+      "json",
+      context,
+    );
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(text);
+    } catch (error) {
+      throw new ProviderFailure({
+        providerId: this.providerId,
+        code: "UPSTREAM_SCHEMA_CHANGED",
+        message: error instanceof Error
+          ? `HKEX returned invalid dividend JSON: ${error.message}`
+          : "HKEX returned invalid dividend JSON",
+        retryable: false,
+      });
+    }
+    const filings = parseFilings(parsed).filter((filing) => {
+      const stockCodes = filing.stockCode.split(/\s+/);
+      return filing.fileType.toUpperCase() === "PDF"
+        && stockCodes.includes(request.instrument.symbol)
+        && /(?:FINAL|INTERIM|SPECIAL)\s+DIVIDEND\s+FOR\b/.test(
+          filing.title.toUpperCase(),
+        )
+        && !/SUPPLEMENT|CLARIFICATION|NOTICE|NOTIFICATION|CANCEL/.test(
+          filing.title.toUpperCase(),
+        )
+        && Date.parse(publishedAt(filing.dateTime)) <= Date.parse(request.asOf)
+        && (
+          requestedYears === undefined
+          || [...requestedYears].some((year) =>
+            filing.title.includes(String(year))
+          )
+        );
+    });
+    return { filings, snapshot };
+  }
+
   private async readFiling(
     filing: Filing,
     context: ProviderContext,
@@ -879,7 +1129,10 @@ export class HkexProvider implements SourceProvider {
     }
 
     const queries = groupRequirements(request.requirements);
-    if (queries.length === 0) {
+    const requestsDividends = request.requirements.some((requirement) =>
+      requirement.conceptId === "distribution.dividendPerShare"
+    );
+    if (queries.length === 0 && !requestsDividends) {
       issues.push({
         providerId: this.providerId,
         code: "EMPTY_RESPONSE",
@@ -907,6 +1160,153 @@ export class HkexProvider implements SourceProvider {
             retryable: false,
           });
       return buildBatch();
+    }
+
+    if (requestsDividends) {
+      try {
+        const found = await this.findDividendFilings(
+          request,
+          resolved.result.stockId,
+          context,
+        );
+        rawSnapshots.push(found.snapshot);
+        if (found.filings.length === 0) {
+          throw new ProviderFailure({
+            providerId: this.providerId,
+            code: "EMPTY_RESPONSE",
+            message:
+              "HKEX has no official cash dividend announcement for the request",
+            retryable: false,
+          });
+        }
+        const components: DividendComponent[] = [];
+        for (const candidate of found.filings) {
+          const filing = await this.readFiling(candidate, context);
+          rawSnapshots.push(filing.snapshot);
+          if (filing.issue !== undefined || filing.pages === undefined) {
+            throw new ProviderFailure(filing.issue ?? {
+              providerId: this.providerId,
+              code: "OFFICIAL_DOCUMENT_UNREADABLE",
+              message: "HKEX dividend PDF text was unavailable",
+              retryable: false,
+            });
+          }
+          const component = extractDividend(
+            filing.pages,
+            candidate,
+            filing.snapshot,
+            filing.sourceUrl,
+          );
+          if (component === undefined) {
+            throw new ProviderFailure({
+              providerId: this.providerId,
+              code: "UPSTREAM_SCHEMA_CHANGED",
+              message:
+                `HKEX dividend announcement ${candidate.newsId} did not expose a supported calendar-year cash amount`,
+              retryable: false,
+            });
+          }
+          components.push(component);
+        }
+        const requestedYears = requestedDividendYears(request.requirements);
+        const dividends = aggregateAnnualDividends(components).filter(
+          (dividend) =>
+            requestedYears === undefined
+            || requestedYears.has(dividend.fiscalYear),
+        );
+        if (dividends.length === 0) {
+          throw new ProviderFailure({
+            providerId: this.providerId,
+            code: "EMPTY_RESPONSE",
+            message:
+              "HKEX has no supported annual cash dividend for the request",
+            retryable: false,
+          });
+        }
+        for (const dividend of dividends) {
+          const latest = dividend.components.at(-1)!;
+          const period = dividendPeriod(dividend.fiscalYear);
+          observations.push(ObservationSchema.parse({
+            observationId: stableId("obs", {
+              providerId: this.providerId,
+              newsIds: dividend.components.map((component) =>
+                component.filing.newsId
+              ),
+              rawField: "Dividend declared",
+              concept: "distribution.dividendPerShare",
+              period,
+              currency: dividend.currency,
+            }),
+            companyId: request.instrument.companyId,
+            instrumentId: request.instrument.instrumentId,
+            concept: "distribution.dividendPerShare",
+            value: dividend.value,
+            unit: `${dividend.currency}-per-share`,
+            scale: "1",
+            period,
+            basis: {
+              standard: "OTHER",
+              scope: "standalone",
+              presentation: "reported",
+              attribution: "all-shareholders",
+              currency: dividend.currency,
+            },
+            availability: {
+              filingDate: dividend.availableAt.slice(0, 10),
+              publishedAt: dividend.availableAt,
+              sourceAsOf: dividend.availableAt,
+              fetchedAt: context.now,
+            },
+            provenance: {
+              providerId: this.providerId,
+              upstreamSourceId: this.upstreamSourceId,
+              sourceType: "official",
+              documentId: latest.filing.newsId,
+              sourceUrl: latest.sourceUrl,
+              rawSnapshotId: latest.snapshot.snapshotId,
+              rawField: "Dividend declared",
+              extractionMethod: "pdf",
+              fetchedAt: context.now,
+              transformations: [
+                {
+                  transformId: "pdf-text-extract",
+                  version: "1.0.0",
+                  detail: "Extract text from official HKEX EF001 PDFs",
+                },
+                {
+                  transformId: "parse-cash-dividend-per-share",
+                  version: "1.0.0",
+                  detail:
+                    "Read the explicit currency and per-share amount from Dividend declared",
+                },
+                {
+                  transformId: "aggregate-annual-cash-dividends",
+                  version: "1.0.0",
+                  detail:
+                    `Sum ${dividend.components.length} official cash distribution(s) from HKEX document(s) ${dividend.components.map((component) => component.filing.newsId).join(", ")} assigned to fiscal year ${dividend.fiscalYear}`,
+                },
+                {
+                  transformId: "shareholder-approval-availability",
+                  version: "1.0.0",
+                  detail:
+                    "Use the later of the exact HKEX release time and date-only shareholder approval at end of day",
+                },
+              ],
+            },
+          }));
+        }
+      } catch (error) {
+        issues.push(error instanceof ProviderFailure
+          ? error.issue
+          : {
+              providerId: this.providerId,
+              code: "PARSE_FAILED",
+              message: error instanceof Error
+                ? error.message
+                : "Failed to parse HKEX dividends",
+              retryable: false,
+            });
+      }
     }
 
     for (const query of queries) {

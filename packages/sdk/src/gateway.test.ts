@@ -311,6 +311,37 @@ describe("FinancialGateway", () => {
     );
   });
 
+  it("does not route to a capable provider that rejects the instrument", async () => {
+    const unsupportedFetch = vi.fn<SourceProvider["fetch"]>(async () => {
+      throw new ProviderFailure({
+        providerId: "hk-only",
+        code: "UNSUPPORTED_INSTRUMENT",
+        message: "HK-only provider received a mainland instrument",
+        retryable: false,
+      });
+    });
+    const unsupportedProvider = {
+      providerId: "hk-only",
+      upstreamSourceId: "hk-only",
+      capabilities: ["financials"] as const,
+      supportsInstrument: () => false,
+      fetch: unsupportedFetch,
+    };
+    const { gateway } = await makeGateway([
+      makeProvider({ providerId: "official", value: "100" }),
+      makeProvider({ providerId: "aggregator", value: "100" }),
+      unsupportedProvider,
+    ]);
+
+    const factSet = await gateway.getFacts(request);
+
+    expect(unsupportedFetch).not.toHaveBeenCalled();
+    expect(factSet.reasonCodes).not.toContain(
+      "PROVIDER_FAILURE:hk-only:UNSUPPORTED_INSTRUMENT",
+    );
+    expect(factSet.summary.overallStatus).toBe("verified");
+  });
+
   it("prefers company metadata from a provider that supplied observations", async () => {
     const emptyProvider: SourceProvider = {
       providerId: "empty-financial",

@@ -184,6 +184,83 @@ describe("HkexProvider", () => {
       .toEqual(["text", "json", "json", "pdf"]);
   });
 
+  it("reads the official cash amount and waits for shareholder approval", async () => {
+    const fetchImplementation = vi.fn<FetchImplementation>(
+      async (input) => {
+        const url = new URL(String(input));
+        if (url.pathname.endsWith("/search/prefix.do")) {
+          return new Response(await fixture("search-00700.jsonp"));
+        }
+        if (url.pathname.endsWith("/search/titleSearchServlet.do")) {
+          expect(url.searchParams.get("title")).toBe("dividend");
+          expect(url.searchParams.get("fromDate")).toBe("20240101");
+          return new Response(
+            await fixture("dividend-00700-2024.json"),
+          );
+        }
+        if (url.pathname.endsWith("2025031900412.pdf")) {
+          return new Response("%PDF-dividend-fixture");
+        }
+        return new Response("not found", { status: 404 });
+      },
+    );
+    const provider = new HkexProvider({
+      fetchImplementation,
+      extractTextImplementation: async () => [
+        await fixture("dividend-00700-2024.txt"),
+      ],
+      retries: 0,
+    });
+    const batch = parseProviderBatch(provider, await provider.fetch({
+      ...request,
+      requirements: [{
+        conceptId: "distribution.dividendPerShare",
+        required: true,
+        period: { fiscalYear: 2024, presentation: "annual" },
+      }],
+      asOf: "2025-05-15T23:59:59+08:00",
+    }, {
+      signal: new AbortController().signal,
+      now: "2025-05-15T10:00:00+08:00",
+      snapshots,
+    }));
+
+    expect(batch.company.legalName).toBe("TENCENT");
+    expect(batch.issues).toEqual([]);
+    expect(batch.rawSnapshots.map((snapshot) => snapshot.mediaType))
+      .toEqual(["text", "json", "pdf"]);
+    expect(batch.observations).toEqual([
+      expect.objectContaining({
+        concept: "distribution.dividendPerShare",
+        value: "4.5",
+        unit: "HKD-per-share",
+        scale: "1",
+        period: {
+          kind: "duration",
+          startDate: "2024-01-01",
+          endDate: "2024-12-31",
+          fiscalYear: 2024,
+          presentation: "annual",
+        },
+        availability: expect.objectContaining({
+          filingDate: "2025-05-14",
+          publishedAt: "2025-05-14T23:59:59+08:00",
+        }),
+        provenance: expect.objectContaining({
+          sourceType: "official",
+          documentId: "11576458",
+          extractionMethod: "pdf",
+          rawField: "Dividend declared",
+          transformations: expect.arrayContaining([
+            expect.objectContaining({
+              transformId: "shareholder-approval-availability",
+            }),
+          ]),
+        }),
+      }),
+    ]);
+  });
+
   it("fails closed before the exact release minute and does not download a PDF", async () => {
     const fetchImplementation = mockFetch({
       results: await fixture("empty.json"),

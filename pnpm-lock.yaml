@@ -116,6 +116,9 @@ importers:
       '@verified-financial/schema':
         specifier: workspace:*
         version: link:../schema
+      decimal.js:
+        specifier: ^10.6.0
+        version: 10.6.0
       unpdf:
         specifier: ^1.8.0
         version: 1.8.0

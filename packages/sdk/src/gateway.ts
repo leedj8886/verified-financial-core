@@ -40,7 +40,7 @@ import {
 } from "./derivation-orchestrator.js";
 
 const DEFAULT_SCHEMA_VERSION = "1.0.0";
-const DEFAULT_VALIDATION_RULES_VERSION = "1.5.0";
+const DEFAULT_VALIDATION_RULES_VERSION = "1.6.0";
 
 export class GatewayError extends Error {
   readonly code: "NOT_FOUND" | "INVALID_INPUT" | "STORAGE_ERROR";
@@ -110,6 +110,13 @@ function requirementsForProvider(
   return requirements.filter((requirement) =>
     capabilities.has(capabilityForRequirement(requirement))
   );
+}
+
+function supportsInstrument(
+  provider: SourceProvider,
+  instrument: Instrument,
+): boolean {
+  return provider.supportsInstrument?.(instrument) ?? true;
 }
 
 export function defaultMaxAgeSeconds(
@@ -568,7 +575,10 @@ export class FinancialGateway {
     const fetchRequirements = expandDerivationRequirements(
       request.requirements,
     );
-    const providerPlans = this.providers.flatMap((provider) => {
+    const eligibleProviders = this.providers.filter((provider) =>
+      supportsInstrument(provider, resolution.instrument)
+    );
+    const providerPlans = eligibleProviders.flatMap((provider) => {
       const requirements = requirementsForProvider(
         provider,
         fetchRequirements,
@@ -577,7 +587,7 @@ export class FinancialGateway {
     });
     const unsupportedReasons = request.requirements
       .filter((requirement) =>
-        !this.providers.some((provider) =>
+        !eligibleProviders.some((provider) =>
           provider.capabilities.includes(
             capabilityForRequirement(requirement),
           )
