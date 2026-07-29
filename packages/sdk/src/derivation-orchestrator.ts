@@ -2,6 +2,7 @@ import {
   canonicalJson,
   deriveFreeCashFlow,
   deriveMarketCap,
+  deriveRoe,
   deriveTtmFlow,
 } from "@verified-financial/core";
 import {
@@ -13,6 +14,7 @@ import {
 
 const FREE_CASH_FLOW = "cashFlow.freeCashFlow";
 const MARKET_CAP = "market.cap";
+const PROFITABILITY_ROE = "profitability.roe";
 const TTM_FLOW_CONCEPTS = new Set<ConceptId>([
   "income.revenue",
   "income.operatingProfit",
@@ -85,6 +87,19 @@ function dependencyRequirements(
         false,
         requirement.period,
       ),
+    );
+  }
+  if (
+    requirement.conceptId === PROFITABILITY_ROE
+    && requirement.period?.presentation === "annual"
+  ) {
+    dependencies.push(
+      periodRequirement("income.netProfit", false, requirement.period),
+      periodRequirement("balance.equity", false, requirement.period),
+      periodRequirement("balance.equity", false, {
+        fiscalYear: requirement.period.fiscalYear - 1,
+        presentation: "annual",
+      }),
     );
   }
   const period = requirement.period;
@@ -250,10 +265,49 @@ function materializeMarketCap(
   );
 }
 
+function materializeRoe(
+  facts: readonly CanonicalFact[],
+  requirement: FactRequirement,
+): CanonicalFact | undefined {
+  const period = requirement.period;
+  if (period?.presentation !== "annual") return undefined;
+  const netProfit = usableMatches(facts, periodRequirement(
+    "income.netProfit",
+    false,
+    period,
+  ));
+  const openingEquity = usableMatches(facts, periodRequirement(
+    "balance.equity",
+    false,
+    {
+      fiscalYear: period.fiscalYear - 1,
+      presentation: "annual",
+    },
+  ));
+  const closingEquity = usableMatches(facts, periodRequirement(
+    "balance.equity",
+    false,
+    period,
+  ));
+  return firstSuccessfulDerivation(
+    [netProfit, openingEquity, closingEquity],
+    ([profit, opening, closing]) =>
+      deriveRoe({
+        netProfit: profit!,
+        openingEquity: opening!,
+        closingEquity: closing!,
+      }),
+  );
+}
+
 function supportsAutomaticDerivation(requirement: FactRequirement): boolean {
   if (
     requirement.conceptId === FREE_CASH_FLOW
     || requirement.conceptId === MARKET_CAP
+    || (
+      requirement.conceptId === PROFITABILITY_ROE
+      && requirement.period?.presentation === "annual"
+    )
   ) {
     return true;
   }
@@ -288,6 +342,11 @@ export function materializeRequestedFacts(
       && requirement.conceptId === MARKET_CAP
     ) {
       derived = materializeMarketCap(available, requirement);
+    } else if (
+      derived === undefined
+      && requirement.conceptId === PROFITABILITY_ROE
+    ) {
+      derived = materializeRoe(available, requirement);
     }
     if (derived !== undefined) {
       selected.set(derived.factId, derived);

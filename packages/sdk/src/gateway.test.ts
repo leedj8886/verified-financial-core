@@ -455,6 +455,96 @@ describe("FinancialGateway", () => {
     ).toHaveLength(2);
   });
 
+  it("derives annual ROE from profit and opening/closing equity", async () => {
+    const basis: AccountingBasis = {
+      standard: "IFRS",
+      scope: "consolidated",
+      presentation: "reported",
+      attribution: "all-shareholders",
+      currency: "CNY",
+    };
+    const fixture = makeDerivationProvider({
+      providerId: "roe-derived",
+      capabilities: ["financials"],
+      records: [
+        {
+          concept: "income.netProfit",
+          value: "20",
+          unit: "CNY",
+          period: {
+            kind: "duration",
+            startDate: "2025-01-01",
+            endDate: "2025-12-31",
+            fiscalYear: 2025,
+            presentation: "annual",
+          },
+          basis,
+        },
+        {
+          concept: "balance.equity",
+          value: "90",
+          unit: "CNY",
+          period: {
+            kind: "instant",
+            endDate: "2024-12-31",
+            fiscalYear: 2024,
+            presentation: "annual",
+          },
+          basis,
+        },
+        {
+          concept: "balance.equity",
+          value: "110",
+          unit: "CNY",
+          period: {
+            kind: "instant",
+            endDate: "2025-12-31",
+            fiscalYear: 2025,
+            presentation: "annual",
+          },
+          basis,
+        },
+      ],
+    });
+    const { gateway } = await makeGateway([fixture.provider]);
+    const factSet = await gateway.getFacts({
+      instrument: "600519.SH",
+      requirements: [{
+        conceptId: "profitability.roe",
+        required: true,
+        period: { fiscalYear: 2025, presentation: "annual" },
+      }],
+      asOf: "2026-07-27T23:59:59+08:00",
+    });
+
+    expect(factSet.facts).toEqual([
+      expect.objectContaining({
+        concept: "profitability.roe",
+        value: "0.2",
+        unit: "ratio",
+        derivation: expect.objectContaining({
+          formulaId: "roe.average-equity.v1",
+        }),
+      }),
+    ]);
+    expect(fixture.fetch.mock.calls[0]?.[0].requirements).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          conceptId: "income.netProfit",
+          period: { fiscalYear: 2025, presentation: "annual" },
+        }),
+        expect.objectContaining({
+          conceptId: "balance.equity",
+          period: { fiscalYear: 2024, presentation: "annual" },
+        }),
+        expect.objectContaining({
+          conceptId: "balance.equity",
+          period: { fiscalYear: 2025, presentation: "annual" },
+        }),
+      ]),
+    );
+  });
+
   it("derives an explicit-quarter TTM flow from YTD and annual facts", async () => {
     const basis: AccountingBasis = {
       standard: "CAS",

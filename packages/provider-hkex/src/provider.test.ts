@@ -120,6 +120,28 @@ describe("HkexProvider", () => {
     });
   });
 
+  it("extracts MIXUE statements despite page headers, wrapped rows, and repeated headings", async () => {
+    const pages = (await fixture("annual-02097-2025.txt"))
+      .split("\n===PAGE===\n");
+    expect(extractFinancialValues(pages)).toEqual({
+      values: {
+        "income.revenue": "33559923",
+        "income.netProfit": "5927077",
+        "income.netProfitParent": "5886704",
+        "income.epsBasic": "15.65",
+        "balance.assets": "30793625",
+        "balance.liabilities": "6024867",
+        "balance.equity": "24768758",
+        "balance.cash": "7429100",
+        "cashFlow.operatingCashFlow": "6039033",
+        "cashFlow.capex": "685177",
+      },
+      currency: "CNY",
+      scale: "1000",
+      standard: "IFRS",
+    });
+  });
+
   it("resolves the issuer, prefers the full report, and emits official facts", async () => {
     const fetchImplementation = mockFetch();
     const provider = new HkexProvider({
@@ -157,6 +179,39 @@ describe("HkexProvider", () => {
       },
     });
     expect(fetchImplementation).toHaveBeenCalledTimes(3);
+  });
+
+  it("emits statement EPS as an unscaled instrument fact", async () => {
+    const provider = new HkexProvider({
+      fetchImplementation: mockFetch(),
+      extractTextImplementation: async () =>
+        (await fixture("annual-02097-2025.txt")).split("\n===PAGE===\n"),
+      retries: 0,
+    });
+    const batch = parseProviderBatch(provider, await provider.fetch({
+      ...request,
+      requirements: [{
+        conceptId: "income.epsBasic",
+        required: true,
+        period: { fiscalYear: 2025, presentation: "annual" },
+      }],
+    }, {
+      signal: new AbortController().signal,
+      now: "2026-07-28T10:00:00+08:00",
+      snapshots,
+    }));
+
+    expect(batch.issues).toEqual([]);
+    expect(batch.unmapped).toEqual([]);
+    expect(batch.observations).toEqual([
+      expect.objectContaining({
+        instrumentId: "XHKG:00700",
+        concept: "income.epsBasic",
+        value: "15.65",
+        unit: "CNY-per-share",
+        scale: "1",
+      }),
+    ]);
   });
 
   it("falls back to the earlier results announcement for historical as-of", async () => {
@@ -256,6 +311,64 @@ describe("HkexProvider", () => {
               transformId: "shareholder-approval-availability",
             }),
           ]),
+        }),
+      }),
+    ]);
+  });
+
+  it("uses the annual report as official evidence for a zero dividend", async () => {
+    const fetchImplementation = vi.fn<FetchImplementation>(
+      async (input) => {
+        const url = new URL(String(input));
+        if (url.pathname.endsWith("/search/prefix.do")) {
+          return new Response(await fixture("search-00700.jsonp"));
+        }
+        if (url.pathname.endsWith("/search/titleSearchServlet.do")) {
+          const title = url.searchParams.get("title");
+          if (title === "dividend") {
+            return new Response(await fixture("empty.json"));
+          }
+          if (title === "annual report") {
+            return new Response(await fixture("annual-report-00700-2025.json"));
+          }
+          return new Response(await fixture("annual-results-00700-2025.json"));
+        }
+        if (url.pathname.endsWith(".pdf")) {
+          return new Response("%PDF-annual-report-fixture");
+        }
+        return new Response("not found", { status: 404 });
+      },
+    );
+    const provider = new HkexProvider({
+      fetchImplementation,
+      extractTextImplementation: async () =>
+        (await fixture("annual-02097-2025.txt")).split("\n===PAGE===\n"),
+      retries: 0,
+    });
+    const batch = parseProviderBatch(provider, await provider.fetch({
+      ...request,
+      requirements: [{
+        conceptId: "distribution.dividendPerShare",
+        required: true,
+        period: { fiscalYear: 2025, presentation: "annual" },
+      }],
+    }, {
+      signal: new AbortController().signal,
+      now: "2026-07-28T10:00:00+08:00",
+      snapshots,
+    }));
+
+    expect(batch.issues).toEqual([]);
+    expect(batch.observations).toEqual([
+      expect.objectContaining({
+        instrumentId: "XHKG:00700",
+        concept: "distribution.dividendPerShare",
+        value: "0",
+        unit: "CNY-per-share",
+        scale: "1",
+        provenance: expect.objectContaining({
+          sourceType: "official",
+          rawField: "Annual report.Dividends.No dividends paid or declared",
         }),
       }),
     ]);

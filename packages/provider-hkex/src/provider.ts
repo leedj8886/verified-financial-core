@@ -26,7 +26,7 @@ import { extractText, getDocumentProxy } from "unpdf";
 
 const PROVIDER_ID = "hkex-direct";
 const UPSTREAM_SOURCE_ID = "hkex";
-const MAPPING_VERSION = "hkex@1.1.0";
+const MAPPING_VERSION = "hkex@1.2.0";
 const BASE_URL = "https://www1.hkexnews.hk/";
 const USER_AGENT =
   "verified-financial-core/0.1 (+https://github.com/leedj8886/verified-financial-core)";
@@ -85,6 +85,8 @@ interface FieldDefinition {
   statement: StatementKind;
   rawField: string;
   attribution?: AccountingBasis["attribution"];
+  unit?: "currency" | "currency-per-share";
+  scale?: string;
 }
 
 interface StatementUnit {
@@ -126,6 +128,7 @@ const fieldDefinitions: readonly FieldDefinition[] = [
     concept: "income.netProfit",
     statement: "income",
     rawField: "Consolidated income statement.Profit for the year/period",
+    attribution: "all-shareholders",
   },
   {
     concept: "income.netProfitParent",
@@ -133,6 +136,15 @@ const fieldDefinitions: readonly FieldDefinition[] = [
     rawField:
       "Consolidated income statement.Profit attributable to equity holders/owners of the company",
     attribution: "parent",
+  },
+  {
+    concept: "income.epsBasic",
+    statement: "income",
+    rawField:
+      "Consolidated income statement.Basic earnings per share attributable to ordinary equity holders of the parent",
+    attribution: "parent",
+    unit: "currency-per-share",
+    scale: "1",
   },
   {
     concept: "balance.assets",
@@ -185,12 +197,23 @@ export const HKEX_FIELD_MAPPINGS: readonly SourceFieldMapping[] = [
       "shareholder-approval-availability",
     ],
   },
+  {
+    upstreamSchema: "hkex.periodic-report.pdf",
+    rawField: "Annual report.Dividends.No dividends paid or declared",
+    conceptId: "distribution.dividendPerShare",
+    unit: "currency-per-share",
+    scale: "1",
+    transformIds: [
+      "pdf-text-extract",
+      "parse-explicit-zero-dividend",
+    ],
+  },
   ...fieldDefinitions.map((field) => ({
     upstreamSchema: "hkex.periodic-report.pdf",
     rawField: field.rawField,
     conceptId: field.concept,
-    unit: "currency",
-    scale: "1",
+    unit: field.unit ?? "currency",
+    scale: field.scale ?? "1",
     transformIds: [
       "pdf-text-extract",
       "consolidated-statement-label-match",
@@ -436,6 +459,18 @@ function extractDividend(
   };
 }
 
+function extractNoDividendYears(pages: readonly string[]): ReadonlySet<number> {
+  const text = normalizeLine(pages.join(" "));
+  const years = new Set<number>();
+  const pattern =
+    /No dividends have been paid or declared by the Company during the year ended 31 December (\d{4})(?: and (\d{4}))?/gi;
+  for (const match of text.matchAll(pattern)) {
+    if (match[1] !== undefined) years.add(Number(match[1]));
+    if (match[2] !== undefined) years.add(Number(match[2]));
+  }
+  return years;
+}
+
 function aggregateAnnualDividends(
   components: readonly DividendComponent[],
 ): AnnualDividend[] {
@@ -506,7 +541,12 @@ function groupRequirements(
 ): FilingQuery[] {
   const groups = new Map<string, FilingQuery>();
   for (const requirement of requirements) {
-    if (!definitionsByConcept.has(requirement.conceptId)) continue;
+    if (
+      !definitionsByConcept.has(requirement.conceptId)
+      && requirement.conceptId !== "distribution.dividendPerShare"
+    ) {
+      continue;
+    }
     const query = reportQuery(requirement);
     if (query === undefined) continue;
     const key = JSON.stringify(query);
@@ -536,12 +576,28 @@ function statementSections(pages: readonly string[]): Record<
 > {
   const lines = pages.flatMap((page) => page.split(/\r?\n/))
     .map(normalizeLine);
+  const hasStatementContext = (
+    start: number,
+    kind: StatementKind,
+  ): boolean => {
+    const header = lines.slice(start, start + 20).join(" ");
+    const hasUnit =
+      /(RMB|CNY|HKD|HK\$|US\$|USD)\s*'?\s*(?:Million|Billion|Thousand|000)?/i
+        .test(header);
+    const hasPeriod = kind === "balance"
+      ? /\bAS AT\b|\bAT \d{1,2} [A-Z]+ \d{4}\b|\b\d{1,2} DECEMBER \d{4}\b/i
+        .test(header)
+      : /\b(?:YEAR|PERIOD) ENDED\b|\bYear ended\b/i.test(header);
+    return hasUnit && hasPeriod;
+  };
   const slice = (
+    kind: StatementKind,
     starts: readonly RegExp[],
     ends: readonly RegExp[],
   ): string[] => {
-    const start = lines.findIndex((line) =>
+    const start = lines.findIndex((line, index) =>
       starts.some((pattern) => pattern.test(line))
+      && hasStatementContext(index, kind)
     );
     if (start < 0) return [];
     const relativeEnd = lines.slice(start + 1).findIndex((line) =>
@@ -554,31 +610,34 @@ function statementSections(pages: readonly string[]): Record<
   };
   return {
     income: slice(
+      "income",
       [
-        /^(?:CONDENSED )?CONSOLIDATED INCOME STATEMENT$/i,
-        /^(?:CONDENSED )?CONSOLIDATED STATEMENT OF PROFIT OR LOSS$/i,
+        /(?:CONDENSED )?CONSOLIDATED INCOME STATEMENT/i,
+        /(?:CONDENSED )?CONSOLIDATED STATEMENT OF PROFIT OR LOSS/i,
       ],
       [
-        /^CONSOLIDATED STATEMENT OF COMPREHENSIVE INCOME$/i,
-        /^CONSOLIDATED STATEMENT OF FINANCIAL POSITION$/i,
+        /CONSOLIDATED STATEMENT OF COMPREHENSIVE INCOME/i,
+        /CONSOLIDATED STATEMENT OF FINANCIAL POSITION/i,
       ],
     ),
     balance: slice(
+      "balance",
       [
-        /^(?:CONDENSED )?CONSOLIDATED STATEMENT OF FINANCIAL POSITION$/i,
-        /^(?:CONDENSED )?CONSOLIDATED BALANCE SHEET$/i,
+        /(?:CONDENSED )?CONSOLIDATED STATEMENT OF FINANCIAL POSITION/i,
+        /(?:CONDENSED )?CONSOLIDATED BALANCE SHEET/i,
       ],
       [
-        /^CONSOLIDATED STATEMENT OF CHANGES IN EQUITY$/i,
-        /^(?:CONDENSED )?CONSOLIDATED STATEMENT OF CASH FLOWS$/i,
+        /CONSOLIDATED STATEMENT OF CHANGES IN EQUITY/i,
+        /(?:CONDENSED )?CONSOLIDATED STATEMENT OF CASH FLOWS/i,
       ],
     ),
     cashFlow: slice(
+      "cashFlow",
       [
-        /^(?:CONDENSED )?CONSOLIDATED STATEMENT OF CASH FLOWS$/i,
-        /^(?:CONDENSED )?CONSOLIDATED CASH FLOW STATEMENT$/i,
+        /(?:CONDENSED )?CONSOLIDATED STATEMENT OF CASH FLOWS/i,
+        /(?:CONDENSED )?CONSOLIDATED CASH FLOW STATEMENT/i,
       ],
-      [/^NOTES TO THE CONSOLIDATED FINANCIAL STATEMENTS$/i],
+      [/NOTES TO THE CONSOLIDATED FINANCIAL STATEMENTS/i],
     ),
   };
 }
@@ -607,16 +666,30 @@ function rowValue(
   labels: readonly RegExp[],
 ): string | undefined {
   for (let index = 0; index < lines.length; index += 1) {
-    const line = lines[index]!;
-    const label = labels.find((pattern) => pattern.test(line));
-    if (label === undefined) continue;
-    const afterLabel = line.slice(line.search(label) + line.match(label)![0].length);
-    const sameLine = afterLabel.match(numericPattern) ?? [];
-    if (sameLine.length > 0) return currentValue(sameLine);
-    const nextLine = lines[index + 1]?.match(numericPattern) ?? [];
-    if (nextLine.length > 0) return currentValue(nextLine);
+    for (let lineCount = 1; lineCount <= 4; lineCount += 1) {
+      const row = lines.slice(index, index + lineCount).join(" ");
+      const match = labels
+        .map((pattern) => pattern.exec(row))
+        .find((candidate) => candidate !== null);
+      if (match === undefined || match === null) continue;
+      const values = row.slice(match.index + match[0].length)
+        .match(numericPattern) ?? [];
+      if (values.length > 0) return currentValue(values);
+    }
   }
   return undefined;
+}
+
+function sumRows(
+  lines: readonly string[],
+  leftLabels: readonly RegExp[],
+  rightLabels: readonly RegExp[],
+): string | undefined {
+  const left = rowValue(lines, leftLabels);
+  const right = rowValue(lines, rightLabels);
+  return left === undefined || right === undefined
+    ? undefined
+    : new Decimal(left).plus(right).toString();
 }
 
 function revenueValue(lines: readonly string[]): string | undefined {
@@ -658,16 +731,16 @@ function capexValue(lines: readonly string[]): string | undefined {
     return currentValue(row.match(numericPattern) ?? []);
   };
   const combined = component(
-    /Purchase(?:s)?(?: of)?(?:\/prepayments for)? property, plant and equipment,? (?:and )?intangible assets/i,
+    /Purchase(?:s)?(?: of)?(?:\/prepayments for)?(?: items of)? property, plant and equipment,? (?:and )?intangible assets/i,
     /Proceeds|Payments|Purchase|Refund|Net cash/i,
   );
   if (combined !== undefined) return new Decimal(combined).abs().toString();
   const property = component(
-    /Purchase(?:s)?(?: of)?(?:\/prepayments for)? property, plant and equipment/i,
+    /Purchase(?:s)?(?: of)?(?:\/prepayments for)?(?: items of)? property, plant and equipment/i,
     /Proceeds|Purchase|Refund|Payments|Net cash/i,
   );
   const intangible = component(
-    /Purchase(?:s)?(?: of)?(?:\/prepayments for)? intangible assets/i,
+    /Purchase(?:s)?(?: of)?(?:\/prepayments for)?(?: other)? intangible assets/i,
     /Proceeds|Purchase|Refund|Payments|Net cash/i,
   );
   if (property === undefined || intangible === undefined) return undefined;
@@ -720,13 +793,25 @@ export function extractFinancialValues(
   assign("income.netProfitParent", rowValue(sections.income, [
       /^Equity holders of the Company(?:\s|$)/i,
       /^Owners of the Company(?:\s|$)/i,
+      /^Owners of the parent(?:\s|$)/i,
+  ]));
+  assign("income.epsBasic", rowValue(sections.income, [
+      /^Basic(?: and diluted)?(?: earnings per share)?(?: \(RMB\))?(?:\s|$)/i,
   ]));
   assign("balance.assets", rowValue(sections.balance, [
-      /^Total assets(?:\s|$)/i,
-  ]));
+      /^Total assets(?! less current liabilities)(?:\s|$)/i,
+  ]) ?? sumRows(
+    sections.balance,
+    [/^Total non-current assets(?:\s|$)/i],
+    [/^Total current assets(?:\s|$)/i],
+  ));
   assign("balance.liabilities", rowValue(sections.balance, [
       /^Total liabilities(?! and equity)(?:\s|$)/i,
-  ]));
+  ]) ?? sumRows(
+    sections.balance,
+    [/^Total current liabilities(?:\s|$)/i],
+    [/^Total non-current liabilities(?:\s|$)/i],
+  ));
   assign("balance.equity", rowValue(sections.balance, [
       /^Total equity(?! and liabilities)(?:\s|$)/i,
   ]));
@@ -1090,6 +1175,7 @@ export class HkexProvider implements SourceProvider {
     const unmapped: UnmappedObservation[] = [];
     const rawSnapshots: StoredSnapshotRef[] = [];
     const issues: ProviderIssue[] = [];
+    let deferredDividendIssue: ProviderIssue | undefined;
     let legalName = request.instrument.instrumentId;
 
     const buildBatch = (): ProviderBatch => ({
@@ -1296,7 +1382,7 @@ export class HkexProvider implements SourceProvider {
           }));
         }
       } catch (error) {
-        issues.push(error instanceof ProviderFailure
+        deferredDividendIssue = error instanceof ProviderFailure
           ? error.issue
           : {
               providerId: this.providerId,
@@ -1305,11 +1391,22 @@ export class HkexProvider implements SourceProvider {
                 ? error.message
                 : "Failed to parse HKEX dividends",
               retryable: false,
-            });
+            };
       }
     }
 
     for (const query of queries) {
+      const pendingRequirements = query.requirements.filter((requirement) =>
+        requirement.conceptId !== "distribution.dividendPerShare"
+        || !observations.some((observation) =>
+          observation.concept === "distribution.dividendPerShare"
+          && (
+            requirement.period === undefined
+            || observation.period.fiscalYear === requirement.period.fiscalYear
+          )
+        )
+      );
+      if (pendingRequirements.length === 0) continue;
       try {
         const found = await this.findFiling(
           request,
@@ -1340,14 +1437,91 @@ export class HkexProvider implements SourceProvider {
           continue;
         }
         const extraction = extractFinancialValues(filing.pages);
+        const noDividendYears = extractNoDividendYears(filing.pages);
         const releasedAt = publishedAt(found.filing.dateTime);
-        for (const requirement of query.requirements) {
+        for (const requirement of pendingRequirements) {
+          if (
+            requirement.conceptId === "distribution.dividendPerShare"
+          ) {
+            const fiscalYear = requirement.period?.fiscalYear;
+            if (
+              fiscalYear !== undefined
+              && noDividendYears.has(fiscalYear)
+              && !observations.some((observation) =>
+                observation.concept === "distribution.dividendPerShare"
+                && observation.period.fiscalYear === fiscalYear
+              )
+            ) {
+              const currency = extraction.currency
+                ?? request.instrument.tradingCurrency;
+              const period = dividendPeriod(fiscalYear);
+              observations.push(ObservationSchema.parse({
+                observationId: stableId("obs", {
+                  providerId: this.providerId,
+                  documentId: found.filing.newsId,
+                  rawField:
+                    "Annual report.Dividends.No dividends paid or declared",
+                  concept: "distribution.dividendPerShare",
+                  period,
+                  currency,
+                }),
+                companyId: request.instrument.companyId,
+                instrumentId: request.instrument.instrumentId,
+                concept: "distribution.dividendPerShare",
+                value: "0",
+                unit: `${currency}-per-share`,
+                scale: "1",
+                period,
+                basis: {
+                  standard: extraction.standard,
+                  scope: "standalone",
+                  presentation: "reported",
+                  attribution: "all-shareholders",
+                  currency,
+                },
+                availability: {
+                  filingDate: releasedAt.slice(0, 10),
+                  publishedAt: releasedAt,
+                  sourceAsOf: releasedAt,
+                  fetchedAt: context.now,
+                },
+                provenance: {
+                  providerId: this.providerId,
+                  upstreamSourceId: this.upstreamSourceId,
+                  sourceType: "official",
+                  documentId: found.filing.newsId,
+                  sourceUrl: filing.sourceUrl,
+                  rawSnapshotId: filing.snapshot.snapshotId,
+                  rawField:
+                    "Annual report.Dividends.No dividends paid or declared",
+                  extractionMethod: "pdf",
+                  fetchedAt: context.now,
+                  transformations: [
+                    {
+                      transformId: "pdf-text-extract",
+                      version: "1.0.0",
+                      detail:
+                        "Extract text from the official HKEX PDF with unpdf",
+                    },
+                    {
+                      transformId: "parse-explicit-zero-dividend",
+                      version: "1.0.0",
+                      detail:
+                        `Read the annual report's explicit no-dividend statement for fiscal year ${fiscalYear}`,
+                    },
+                  ],
+                },
+              }));
+            }
+            continue;
+          }
           const field = definitionsByConcept.get(requirement.conceptId)!;
           const value = extraction.values[requirement.conceptId];
+          const scale = field.scale ?? extraction.scale;
           if (
             value === undefined
             || extraction.currency === undefined
-            || extraction.scale === undefined
+            || scale === undefined
           ) {
             unmapped.push(UnmappedObservationSchema.parse({
               unmappedId: stableId("unmapped", {
@@ -1377,10 +1551,15 @@ export class HkexProvider implements SourceProvider {
               period,
             }),
             companyId: request.instrument.companyId,
+            ...(field.unit === "currency-per-share"
+              ? { instrumentId: request.instrument.instrumentId }
+              : {}),
             concept: field.concept,
             value,
-            unit: extraction.currency,
-            scale: extraction.scale,
+            unit: field.unit === "currency-per-share"
+              ? `${extraction.currency}-per-share`
+              : extraction.currency,
+            scale,
             period,
             basis: {
               standard: extraction.standard,
@@ -1449,6 +1628,14 @@ export class HkexProvider implements SourceProvider {
               retryable: false,
             });
       }
+    }
+    if (
+      deferredDividendIssue !== undefined
+      && !observations.some((observation) =>
+        observation.concept === "distribution.dividendPerShare"
+      )
+    ) {
+      issues.push(deferredDividendIssue);
     }
     return buildBatch();
   }
