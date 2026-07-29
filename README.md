@@ -56,6 +56,7 @@ ledger.
 
 - Node.js 22 or newer (development baseline: 24.16.0)
 - pnpm 8.15.6
+- Bun 1.3 or newer (optional Dexter runtime compatibility test)
 
 The project-local `.npmrc` uses the official npm registry without changing
 global npm configuration.
@@ -66,9 +67,11 @@ global npm configuration.
 pnpm install
 pnpm check
 pnpm test:coverage
+pnpm test:bun
 ```
 
-All default tests are offline. Public endpoint canaries are opt-in:
+All default tests and the Bun/Dexter storage smoke test are offline. Public
+endpoint canaries are opt-in:
 
 ```bash
 pnpm test:live

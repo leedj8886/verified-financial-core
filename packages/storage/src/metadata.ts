@@ -11,7 +11,10 @@ import {
   type Observation,
   type VerifiedFactSet,
 } from "@verified-financial/schema";
-import Database from "better-sqlite3";
+import {
+  openSqliteDatabase,
+  type SqliteDatabase,
+} from "./sqlite.js";
 
 interface FactSetRow {
   fact_set_json: string;
@@ -51,14 +54,14 @@ export interface FactExplanation {
 
 export class MetadataStore {
   readonly databasePath: string;
-  private readonly database: Database.Database;
+  private readonly database: SqliteDatabase;
 
   constructor(databasePath: string) {
     this.databasePath = databasePath;
     mkdirSync(dirname(databasePath), { recursive: true });
-    this.database = new Database(databasePath);
-    this.database.pragma("journal_mode = WAL");
-    this.database.pragma("foreign_keys = ON");
+    this.database = openSqliteDatabase(databasePath);
+    this.database.exec("PRAGMA journal_mode = WAL");
+    this.database.exec("PRAGMA foreign_keys = ON");
     this.migrate();
   }
 
