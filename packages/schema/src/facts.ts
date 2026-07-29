@@ -17,6 +17,16 @@ import {
 import { ProvenanceSchema } from "./provenance.js";
 import { DecimalStringSchema } from "./value.js";
 
+export const VERIFIED_FACT_SET_SCHEMA_VERSION = "1.0.0" as const;
+export type VerifiedFactSetSchemaVersion =
+  typeof VERIFIED_FACT_SET_SCHEMA_VERSION;
+
+export function isSupportedVerifiedFactSetSchemaVersion(
+  value: unknown,
+): value is VerifiedFactSetSchemaVersion {
+  return value === VERIFIED_FACT_SET_SCHEMA_VERSION;
+}
+
 export const FactStatusSchema = z.enum(["verified", "warning", "failed"]);
 export type FactStatus = z.infer<typeof FactStatusSchema>;
 
@@ -218,8 +228,20 @@ export const CanonicalFactSchema = z.object({
 });
 export type CanonicalFact = z.infer<typeof CanonicalFactSchema>;
 
+export const FactSetLineageVersionsSchema = z.object({
+  conceptRegistryVersion: z.string().min(1),
+  validationRulesVersion: z.string().min(1),
+  mappingVersions: z.array(z.string().min(1)),
+  formulaVersions: z.record(
+    z.string().min(1),
+    z.string().min(1),
+  ),
+}).strict();
+export type FactSetLineageVersions =
+  z.infer<typeof FactSetLineageVersionsSchema>;
+
 export const VerifiedFactSetSchema = z.object({
-  schemaVersion: z.string().min(1),
+  schemaVersion: z.literal(VERIFIED_FACT_SET_SCHEMA_VERSION),
   factSetId: z.string().min(1),
   request: FactRequestSchema,
   generatedAt: z.string().datetime({ offset: true }),
@@ -229,6 +251,7 @@ export const VerifiedFactSetSchema = z.object({
   unmapped: z.array(UnmappedObservationSchema),
   validations: z.array(VerificationResultSchema),
   rawSnapshotIds: z.array(z.string().min(1)),
+  lineageVersions: FactSetLineageVersionsSchema.optional(),
   reasonCodes: z.array(z.string().min(1)),
   summary: z.object({
     verified: z.number().int().nonnegative(),
@@ -237,5 +260,14 @@ export const VerifiedFactSetSchema = z.object({
     unmapped: z.number().int().nonnegative(),
     overallStatus: FactStatusSchema,
   }),
+}).strict().meta({
+  id: `verified-fact-set-${VERIFIED_FACT_SET_SCHEMA_VERSION}`,
+  title: "VerifiedFactSet",
+  description:
+    "Frozen, traceable financial fact package consumed by Gateway clients and Research CI.",
 });
 export type VerifiedFactSet = z.infer<typeof VerifiedFactSetSchema>;
+
+export function parseVerifiedFactSet(value: unknown): VerifiedFactSet {
+  return VerifiedFactSetSchema.parse(value);
+}

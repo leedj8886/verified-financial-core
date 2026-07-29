@@ -17,6 +17,8 @@ financial-data layer.
 Implemented:
 
 - canonical schema and concept registry;
+- frozen `VerifiedFactSet` 1.0.0 wire contract with Zod and draft-07 JSON
+  Schema exports;
 - compatibility, source-independence, verification, derivations, and
   deterministic FactSet assembly;
 - immutable SHA-256 raw snapshot storage and SQLite audit metadata;
@@ -71,6 +73,25 @@ All default tests are offline. Public endpoint canaries are opt-in:
 ```bash
 pnpm test:live
 ```
+
+## VerifiedFactSet contract
+
+Gateway consumers validate the frozen handoff at their process boundary:
+
+```ts
+import { parseVerifiedFactSet } from "@verified-financial/schema";
+import {
+  VERIFIED_FACT_SET_JSON_SCHEMA,
+} from "@verified-financial/schema/json-schema";
+```
+
+The Zod parser is authoritative for financial semantics; the draft-07 JSON
+Schema supports other runtimes and CI tooling. Newly generated FactSets also
+carry concept-registry, validation-rule, Provider mapping, and formula
+versions in `lineageVersions`.
+
+See the
+[VerifiedFactSet 1.0.0 compatibility contract](docs/contracts/verified-fact-set-1.0.0.md).
 
 ## CLI
 

@@ -2,8 +2,11 @@ import { describe, expect, it } from "vitest";
 import {
   FactRequestSchema,
   ObservationSchema,
+  VERIFIED_FACT_SET_SCHEMA_VERSION,
   VerificationResultSchema,
   VerifiedFactSetSchema,
+  isSupportedVerifiedFactSetSchemaVersion,
+  parseVerifiedFactSet,
 } from "./facts.js";
 
 const observation = {
@@ -43,6 +46,41 @@ const observation = {
     transformations: [],
   },
 } as const;
+
+function emptyFactSetInput() {
+  return {
+    schemaVersion: VERIFIED_FACT_SET_SCHEMA_VERSION,
+    factSetId: "fs:empty",
+    request: {
+      instrument: "XSHG:600519",
+      requirements: [{
+        conceptId: "income.revenue" as const,
+        required: true,
+        period: { fiscalYear: 2025, presentation: "annual" as const },
+      }],
+      asOf: "2026-07-26T23:59:59+08:00",
+    },
+    generatedAt: "2026-07-26T10:00:00+08:00",
+    company: {
+      companyId: "company:600519",
+      legalName: "贵州茅台酒股份有限公司",
+      jurisdiction: "CN",
+    },
+    instruments: [],
+    facts: [],
+    unmapped: [],
+    validations: [],
+    rawSnapshotIds: [],
+    reasonCodes: ["EMPTY_FACT_SET"],
+    summary: {
+      verified: 0,
+      warnings: 0,
+      failed: 1,
+      unmapped: 0,
+      overallStatus: "failed" as const,
+    },
+  };
+}
 
 describe("financial fact contracts", () => {
   it("rejects binary floating-point values", () => {
@@ -159,38 +197,21 @@ describe("financial fact contracts", () => {
   });
 
   it("accepts an explicit failed empty FactSet", () => {
-    const factSet = VerifiedFactSetSchema.parse({
-      schemaVersion: "1.0.0",
-      factSetId: "fs:empty",
-      request: {
-        instrument: "XSHG:600519",
-        requirements: [{
-          conceptId: "income.revenue",
-          required: true,
-          period: { fiscalYear: 2025, presentation: "annual" },
-        }],
-        asOf: "2026-07-26T23:59:59+08:00",
-      },
-      generatedAt: "2026-07-26T10:00:00+08:00",
-      company: {
-        companyId: "company:600519",
-        legalName: "贵州茅台酒股份有限公司",
-        jurisdiction: "CN",
-      },
-      instruments: [],
-      facts: [],
-      unmapped: [],
-      validations: [],
-      rawSnapshotIds: [],
-      reasonCodes: ["EMPTY_FACT_SET"],
-      summary: {
-        verified: 0,
-        warnings: 0,
-        failed: 1,
-        unmapped: 0,
-        overallStatus: "failed",
-      },
-    });
+    const factSet = VerifiedFactSetSchema.parse(emptyFactSetInput());
     expect(factSet.summary.overallStatus).toBe("failed");
+  });
+
+  it("rejects unsupported versions and unknown top-level fields", () => {
+    expect(VERIFIED_FACT_SET_SCHEMA_VERSION).toBe("1.0.0");
+    expect(isSupportedVerifiedFactSetSchemaVersion("1.0.0")).toBe(true);
+    expect(isSupportedVerifiedFactSetSchemaVersion("2.0.0")).toBe(false);
+    expect(() => parseVerifiedFactSet({
+      schemaVersion: "2.0.0",
+    })).toThrow();
+    const valid = emptyFactSetInput();
+    expect(() => parseVerifiedFactSet({
+      ...valid,
+      unexpected: true,
+    })).toThrow("Unrecognized key");
   });
 });

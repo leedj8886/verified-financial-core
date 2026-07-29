@@ -155,6 +155,18 @@ describe("FactSet assembly", () => {
     expect(factSet).toMatchObject({
       reasonCodes: ["EMPTY_FACT_SET"],
       summary: { overallStatus: "failed" },
+      lineageVersions: {
+        conceptRegistryVersion: "1.0.0",
+        validationRulesVersion: "1.0.0",
+        mappingVersions: ["foundation-fixture@1.0.0"],
+        formulaVersions: {
+          "fcf.ocf-minus-capex.v1": "1.0.0",
+          "market-cap.price-times-shares.v1": "1.0.0",
+          "pe.price-divided-by-eps.v1": "1.0.0",
+          "roe.average-equity.v1": "1.0.0",
+          "ttm.flow.v1": "1.0.0",
+        },
+      },
     });
   });
 });

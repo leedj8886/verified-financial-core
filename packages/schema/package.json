@@ -6,6 +6,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./json-schema": {
+      "types": "./dist/json-schema.d.ts",
+      "import": "./dist/json-schema.js"
     }
   },
   "files": [
@@ -21,6 +25,8 @@
     "zod": "^4.0.0"
   },
   "devDependencies": {
+    "ajv": "^8.20.0",
+    "ajv-formats": "^3.0.1",
     "tsup": "^8.0.0",
     "typescript": "^5.9.0",
     "vitest": "^3.2.0"

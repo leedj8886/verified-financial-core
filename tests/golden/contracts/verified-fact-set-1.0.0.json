@@ -1,0 +1,125 @@
+{
+  "schemaVersion": "1.0.0",
+  "factSetId": "fs:contract-v1",
+  "request": {
+    "instrument": "600519.SH",
+    "requirements": [
+      {
+        "conceptId": "income.revenue",
+        "required": true,
+        "period": {
+          "fiscalYear": 2025,
+          "presentation": "annual"
+        }
+      }
+    ],
+    "asOf": "2026-04-18T23:59:59+08:00"
+  },
+  "generatedAt": "2026-07-29T10:00:00+08:00",
+  "company": {
+    "companyId": "company:XSHG:600519",
+    "legalName": "贵州茅台",
+    "jurisdiction": "CN"
+  },
+  "instruments": [
+    {
+      "instrumentId": "XSHG:600519",
+      "companyId": "company:XSHG:600519",
+      "exchangeMic": "XSHG",
+      "symbol": "600519",
+      "shareClass": "A",
+      "tradingCurrency": "CNY"
+    }
+  ],
+  "facts": [
+    {
+      "factId": "fact:revenue-2025",
+      "companyId": "company:XSHG:600519",
+      "concept": "income.revenue",
+      "value": "172054171890.91",
+      "unit": "CNY",
+      "period": {
+        "kind": "duration",
+        "startDate": "2025-01-01",
+        "endDate": "2025-12-31",
+        "fiscalYear": 2025,
+        "presentation": "annual"
+      },
+      "basis": {
+        "standard": "CAS",
+        "scope": "consolidated",
+        "presentation": "reported",
+        "currency": "CNY"
+      },
+      "status": "verified",
+      "usable": true,
+      "reasonCodes": [],
+      "observationIds": [
+        "obs:cninfo-revenue-2025",
+        "obs:eastmoney-revenue-2025"
+      ],
+      "verification": {
+        "verificationId": "vr:revenue-2025",
+        "status": "verified",
+        "usable": true,
+        "observationIds": [
+          "obs:cninfo-revenue-2025",
+          "obs:eastmoney-revenue-2025"
+        ],
+        "independentUpstreamSourceIds": [
+          "cninfo",
+          "eastmoney"
+        ],
+        "discrepancyPercent": "0",
+        "chosenObservationId": "obs:cninfo-revenue-2025",
+        "reasonCodes": []
+      }
+    }
+  ],
+  "unmapped": [],
+  "validations": [
+    {
+      "verificationId": "vr:revenue-2025",
+      "status": "verified",
+      "usable": true,
+      "observationIds": [
+        "obs:cninfo-revenue-2025",
+        "obs:eastmoney-revenue-2025"
+      ],
+      "independentUpstreamSourceIds": [
+        "cninfo",
+        "eastmoney"
+      ],
+      "discrepancyPercent": "0",
+      "chosenObservationId": "obs:cninfo-revenue-2025",
+      "reasonCodes": []
+    }
+  ],
+  "rawSnapshotIds": [
+    "sha256:cninfo-contract-fixture",
+    "sha256:eastmoney-contract-fixture"
+  ],
+  "lineageVersions": {
+    "conceptRegistryVersion": "1.0.0",
+    "validationRulesVersion": "1.6.0",
+    "mappingVersions": [
+      "cninfo@1.1.0",
+      "eastmoney@1.2.0"
+    ],
+    "formulaVersions": {
+      "ttm.flow.v1": "1.0.0",
+      "fcf.ocf-minus-capex.v1": "1.0.0",
+      "roe.average-equity.v1": "1.0.0",
+      "market-cap.price-times-shares.v1": "1.0.0",
+      "pe.price-divided-by-eps.v1": "1.0.0"
+    }
+  },
+  "reasonCodes": [],
+  "summary": {
+    "verified": 1,
+    "warnings": 0,
+    "failed": 0,
+    "unmapped": 0,
+    "overallStatus": "verified"
+  }
+}

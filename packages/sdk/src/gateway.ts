@@ -15,6 +15,7 @@ import {
 } from "@verified-financial/provider-contract";
 import {
   FactRequestSchema,
+  VERIFIED_FACT_SET_SCHEMA_VERSION,
   isAvailableAsOf,
   type Company,
   type FactRequirement,
@@ -22,6 +23,7 @@ import {
   type Instrument,
   type Observation,
   type VerifiedFactSet,
+  type VerifiedFactSetSchemaVersion,
 } from "@verified-financial/schema";
 import {
   type CachedFactSet,
@@ -39,7 +41,6 @@ import {
   materializeRequestedFacts,
 } from "./derivation-orchestrator.js";
 
-const DEFAULT_SCHEMA_VERSION = "1.0.0";
 const DEFAULT_VALIDATION_RULES_VERSION = "1.6.0";
 
 export class GatewayError extends Error {
@@ -63,7 +64,7 @@ export interface FinancialGatewayOptions {
   resolver?: InstrumentResolver;
   now?: () => string;
   providerTimeoutMs?: number;
-  schemaVersion?: string;
+  schemaVersion?: VerifiedFactSetSchemaVersion;
   validationRulesVersion?: string;
 }
 
@@ -150,7 +151,7 @@ function cacheAgeSeconds(cached: CachedFactSet, now: string): number {
 function requestCacheKey(
   resolution: InstrumentResolution,
   request: FactRequest,
-  schemaVersion: string,
+  schemaVersion: VerifiedFactSetSchemaVersion,
   validationRulesVersion: string,
 ): string {
   return stableId("request", {
@@ -268,7 +269,7 @@ export class FinancialGateway {
   readonly resolver: InstrumentResolver;
   private readonly now: () => string;
   private readonly providerTimeoutMs: number;
-  private readonly schemaVersion: string;
+  private readonly schemaVersion: VerifiedFactSetSchemaVersion;
   private readonly validationRulesVersion: string;
 
   constructor(options: FinancialGatewayOptions) {
@@ -280,7 +281,8 @@ export class FinancialGateway {
     this.resolver = options.resolver ?? new SyntacticInstrumentResolver();
     this.now = options.now ?? (() => new Date().toISOString());
     this.providerTimeoutMs = options.providerTimeoutMs ?? 30_000;
-    this.schemaVersion = options.schemaVersion ?? DEFAULT_SCHEMA_VERSION;
+    this.schemaVersion = options.schemaVersion
+      ?? VERIFIED_FACT_SET_SCHEMA_VERSION;
     this.validationRulesVersion = options.validationRulesVersion
       ?? DEFAULT_VALIDATION_RULES_VERSION;
   }
@@ -679,7 +681,7 @@ export class FinancialGateway {
   }
 
   doctor(): {
-    schemaVersion: string;
+    schemaVersion: VerifiedFactSetSchemaVersion;
     validationRulesVersion: string;
     providers: {
       providerId: string;

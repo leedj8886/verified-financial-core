@@ -1,4 +1,7 @@
-import type { VerifiedFactSet } from "@verified-financial/schema";
+import {
+  VERIFIED_FACT_SET_SCHEMA_VERSION,
+  type VerifiedFactSet,
+} from "@verified-financial/schema";
 import type { InstrumentResolution } from "@verified-financial/sdk";
 import { describe, expect, it, vi } from "vitest";
 import { parsePeriod, runCli, type CliGateway } from "./cli.js";
@@ -42,7 +45,7 @@ function makeGateway(
       rawSnapshotIds: [],
     })),
     doctor: vi.fn(() => ({
-      schemaVersion: "1.0.0",
+      schemaVersion: VERIFIED_FACT_SET_SCHEMA_VERSION,
       validationRulesVersion: "1.0.0",
       providers: [],
       storage: {

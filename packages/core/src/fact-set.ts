@@ -9,12 +9,13 @@ import {
   type UnmappedObservation,
   type VerificationResult,
   type VerifiedFactSet,
+  type VerifiedFactSetSchemaVersion,
 } from "@verified-financial/schema";
 import { FORMULAS } from "./derivations.js";
 import { canonicalJson, stableId } from "./ids.js";
 
 export interface BuildFactSetInput {
-  schemaVersion: string;
+  schemaVersion: VerifiedFactSetSchemaVersion;
   request: FactRequest;
   generatedAt: string;
   company: Company;
@@ -118,6 +119,12 @@ export function buildFactSet(input: BuildFactSetInput): VerifiedFactSet {
     validationRulesVersion: input.validationRulesVersion,
     reasonCodes,
   };
+  const formulaVersions = Object.fromEntries(
+    Object.values(FORMULAS).map((formula) => [
+      formula.formulaId,
+      formula.formulaVersion,
+    ]),
+  );
 
   return VerifiedFactSetSchema.parse({
     schemaVersion: input.schemaVersion,
@@ -130,6 +137,12 @@ export function buildFactSet(input: BuildFactSetInput): VerifiedFactSet {
     unmapped,
     validations,
     rawSnapshotIds,
+    lineageVersions: {
+      conceptRegistryVersion: CONCEPT_REGISTRY_VERSION,
+      validationRulesVersion: input.validationRulesVersion,
+      mappingVersions,
+      formulaVersions,
+    },
     reasonCodes,
     summary: {
       verified,
