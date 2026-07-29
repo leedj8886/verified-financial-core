@@ -156,6 +156,66 @@ describe("public A/H provider live canaries", () => {
     ]);
   });
 
+  it("Eastmoney returns an annual A-share cash dividend per share", async () => {
+    const provider = new EastmoneyProvider();
+    const batch = await fetchLive(provider, {
+      ...marketRequest,
+      requirements: [{
+        conceptId: "distribution.dividendPerShare",
+        required: true,
+        period: { fiscalYear: 2024, presentation: "annual" },
+      }],
+      asOf: "2025-06-21T23:59:59+08:00",
+    });
+    expect(batch.issues).toEqual([]);
+    expect(batch.observations).toEqual([
+      expect.objectContaining({
+        concept: "distribution.dividendPerShare",
+        value: "515.55",
+        unit: "CNY-per-share",
+        scale: "0.1",
+        period: expect.objectContaining({
+          fiscalYear: 2024,
+          presentation: "annual",
+        }),
+      }),
+    ]);
+  });
+
+  it("Eastmoney returns an annual Hong Kong cash dividend per share", async () => {
+    const provider = new EastmoneyProvider();
+    const batch = await fetchLive(provider, {
+      instrument: {
+        instrumentId: "XHKG:00700",
+        companyId: "company:XHKG:00700",
+        exchangeMic: "XHKG",
+        symbol: "00700",
+        shareClass: "H",
+        tradingCurrency: "HKD",
+      },
+      requirements: [{
+        conceptId: "distribution.dividendPerShare",
+        required: true,
+        period: { fiscalYear: 2024, presentation: "annual" },
+      }],
+      asOf: "2025-05-15T23:59:59+08:00",
+      offline: false,
+    });
+    expect(batch.issues).toEqual([]);
+    expect(batch.observations).toEqual([
+      expect.objectContaining({
+        concept: "distribution.dividendPerShare",
+        value: "4.5",
+        unit: "HKD-per-share",
+        scale: "1",
+        period: expect.objectContaining({
+          fiscalYear: 2024,
+          presentation: "annual",
+        }),
+      }),
+    ]);
+  });
+
   it("CNINFO returns a fact extracted from an official annual filing", async () => {
     const provider = new CninfoProvider();
     const batch = await fetchLive(provider, {

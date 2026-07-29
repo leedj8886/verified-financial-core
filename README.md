@@ -25,6 +25,8 @@ Implemented:
   Providers;
 - traceable, unadjusted Tencent/Eastmoney daily closes for historical `asOf`
   queries;
+- annual A/H cash dividends per share with explicit aggregation, currency,
+  scale, and conservative availability;
 - exact cross-source comparison across different source scales;
 - capability-aware Provider routing and request-level FactSet caching;
 - automatic, traceable FCF, explicit-quarter TTM-flow, and market-cap
@@ -102,6 +104,21 @@ weekend request may return the preceding Friday. Mainland daily closes are
 conservatively available from 15:30 +08:00 and Hong Kong closes from 16:30
 +08:00. Same-calendar-day requests continue to use the current quote path.
 
+Request the implemented cash dividend per share assigned to a fiscal year:
+
+```bash
+pnpm --silent ah-context facts 600519.SH \
+  --concept distribution.dividendPerShare \
+  --period 2024FY \
+  --as-of 2025-06-21 \
+  --format json
+```
+
+For A shares, multiple implemented distributions in the same fiscal year are
+summed and source amounts reported per 10 shares retain scale `0.1`. Hong Kong
+cash distributions preserve the currency stated in the source. Proposals
+without an amount and non-cash special distributions are excluded.
+
 Period syntax includes `2025FY`, `2025Q3`, `2025Q3YTD`, `2025TTM`, and the
 explicit-quarter TTM form `2026Q2TTM`. Automatic TTM derivation requires the
 explicit-quarter form.
@@ -159,5 +176,6 @@ and the implementation plans for
 [derivation orchestration](docs/plans/2026-07-28-gateway-derivations.md),
 [CNINFO official filings](docs/plans/2026-07-28-cninfo-provider.md),
 [HKEX official filings](docs/plans/2026-07-28-hkex-provider.md),
-[historical daily close](docs/plans/2026-07-28-historical-close.md), and
+[historical daily close](docs/plans/2026-07-28-historical-close.md),
+[annual dividend per share](docs/plans/2026-07-29-dividend-per-share.md), and
 [public A/H Providers](docs/plans/2026-07-27-market-providers.md).

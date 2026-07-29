@@ -1,0 +1,61 @@
+{
+  "success": true,
+  "result": {
+    "data": [
+      {
+        "SECURITY_CODE": "600519",
+        "SECURITY_NAME_ABBR": "贵州茅台",
+        "PRETAX_BONUS_RMB": null,
+        "REPORT_DATE": "2026-06-30 00:00:00",
+        "ASSIGN_PROGRESS": "预披露",
+        "NOTICE_DATE": "2026-04-17 00:00:00",
+        "EX_DIVIDEND_DATE": null
+      },
+      {
+        "SECURITY_CODE": "600519",
+        "SECURITY_NAME_ABBR": "贵州茅台",
+        "PRETAX_BONUS_RMB": 280.2423,
+        "REPORT_DATE": "2025-12-31 00:00:00",
+        "ASSIGN_PROGRESS": "实施分配",
+        "NOTICE_DATE": "2026-06-22 00:00:00",
+        "EX_DIVIDEND_DATE": "2026-06-26 00:00:00"
+      },
+      {
+        "SECURITY_CODE": "600519",
+        "SECURITY_NAME_ABBR": "贵州茅台",
+        "PRETAX_BONUS_RMB": 239.57,
+        "REPORT_DATE": "2025-09-30 00:00:00",
+        "ASSIGN_PROGRESS": "实施分配",
+        "NOTICE_DATE": "2025-12-11 00:00:00",
+        "EX_DIVIDEND_DATE": "2025-12-19 00:00:00"
+      },
+      {
+        "SECURITY_CODE": "600519",
+        "SECURITY_NAME_ABBR": "贵州茅台",
+        "PRETAX_BONUS_RMB": 276.73,
+        "REPORT_DATE": "2024-12-31 00:00:00",
+        "ASSIGN_PROGRESS": "实施分配",
+        "NOTICE_DATE": "2025-06-20 00:00:00",
+        "EX_DIVIDEND_DATE": "2025-06-26 00:00:00"
+      },
+      {
+        "SECURITY_CODE": "600519",
+        "SECURITY_NAME_ABBR": "贵州茅台",
+        "PRETAX_BONUS_RMB": 276.73,
+        "REPORT_DATE": "2024-12-31 00:00:00",
+        "ASSIGN_PROGRESS": "实施分配",
+        "NOTICE_DATE": "2025-04-03 00:00:00",
+        "EX_DIVIDEND_DATE": "2025-06-26 00:00:00"
+      },
+      {
+        "SECURITY_CODE": "600519",
+        "SECURITY_NAME_ABBR": "贵州茅台",
+        "PRETAX_BONUS_RMB": 238.82,
+        "REPORT_DATE": "2024-09-30 00:00:00",
+        "ASSIGN_PROGRESS": "实施分配",
+        "NOTICE_DATE": "2024-12-14 00:00:00",
+        "EX_DIVIDEND_DATE": "2024-12-20 00:00:00"
+      }
+    ]
+  }
+}

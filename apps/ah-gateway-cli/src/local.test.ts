@@ -3,7 +3,8 @@ import { createDefaultProviders } from "./local.js";
 
 describe("local Gateway providers", () => {
   it("registers five token-free public and official sources by default", () => {
-    expect(createDefaultProviders().map((provider) => provider.providerId))
+    const providers = createDefaultProviders();
+    expect(providers.map((provider) => provider.providerId))
       .toEqual([
         "eastmoney-direct",
         "cninfo-direct",
@@ -11,5 +12,10 @@ describe("local Gateway providers", () => {
         "tencent-direct",
         "baidu-direct",
       ]);
+    expect(
+      providers.find((provider) =>
+        provider.providerId === "eastmoney-direct"
+      )?.capabilities,
+    ).toContain("dividends");
   });
 });

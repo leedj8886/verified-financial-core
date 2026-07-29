@@ -20,6 +20,7 @@ import {
   type ReportingPeriod,
   type UnmappedObservation,
 } from "@verified-financial/schema";
+import { Decimal } from "decimal.js";
 import {
   isLosslessNumber,
   parse as parseLosslessJson,
@@ -27,12 +28,14 @@ import {
 
 const PROVIDER_ID = "eastmoney-direct";
 const UPSTREAM_SOURCE_ID = "eastmoney";
-const MAPPING_VERSION = "eastmoney@1.1.0";
+const MAPPING_VERSION = "eastmoney@1.2.0";
 const QUOTE_ENDPOINT = "https://push2.eastmoney.com/api/qt/stock/get";
 const HISTORY_ENDPOINT =
   "https://push2his.eastmoney.com/api/qt/stock/kline/get";
 const FINANCIAL_ENDPOINT =
   "https://datacenter-web.eastmoney.com/api/data/v1/get";
+const SECURITIES_ENDPOINT =
+  "https://datacenter.eastmoney.com/securities/api/data/v1/get";
 
 type JsonObject = Record<string, unknown>;
 
@@ -43,6 +46,7 @@ export interface EastmoneyProviderOptions {
   quoteEndpoint?: string;
   historyEndpoint?: string;
   financialEndpoint?: string;
+  securitiesEndpoint?: string;
 }
 
 interface FinancialQuery {
@@ -98,6 +102,30 @@ const financialFields: Record<FinancialQuery["reportName"], FinancialField[]> = 
 };
 
 export const EASTMONEY_FIELD_MAPPINGS: readonly SourceFieldMapping[] = [
+  {
+    upstreamSchema: "RPT_SHAREBONUS_DET",
+    rawField: "PRETAX_BONUS_RMB[]",
+    conceptId: "distribution.dividendPerShare",
+    unit: "currency-per-share",
+    scale: "0.1",
+    transformIds: [
+      "per-ten-shares",
+      "aggregate-annual-cash-dividends",
+      "notice-date-end-of-day",
+    ],
+  },
+  {
+    upstreamSchema: "RPT_HKF10_MAIN_DIVBASIC",
+    rawField: "PLAN_EXPLAIN[]",
+    conceptId: "distribution.dividendPerShare",
+    unit: "currency-per-share",
+    scale: "1",
+    transformIds: [
+      "parse-cash-dividend-per-share",
+      "aggregate-annual-cash-dividends",
+      "update-date-end-of-day",
+    ],
+  },
   {
     upstreamSchema: "push2his.daily-kline",
     rawField: "f53",
@@ -332,6 +360,111 @@ function noticeAvailability(noticeDate: string, fetchedAt: string) {
   };
 }
 
+function isoDate(value: string): string | undefined {
+  const normalized = value.slice(0, 10).replaceAll("/", "-");
+  return /^\d{4}-\d{2}-\d{2}$/.test(normalized)
+    ? normalized
+    : undefined;
+}
+
+function dividendPeriod(fiscalYear: number): ReportingPeriod {
+  return {
+    kind: "duration",
+    startDate: `${fiscalYear}-01-01`,
+    endDate: `${fiscalYear}-12-31`,
+    fiscalYear,
+    presentation: "annual",
+  };
+}
+
+interface DividendComponent {
+  fiscalYear: number;
+  currency: "CNY" | "HKD" | "USD";
+  value: string;
+  availableDate: string;
+  identity: string;
+}
+
+interface AnnualDividend {
+  fiscalYear: number;
+  currency: DividendComponent["currency"];
+  value: string;
+  availableDate: string;
+  identities: string[];
+}
+
+function parseHongKongCashDividend(
+  plan: string,
+): Pick<DividendComponent, "currency" | "value"> | undefined {
+  const match = /^每股派(港币|港元|人民币|美元)([+-]?(?:\d+(?:\.\d*)?|\.\d+))元?$/
+    .exec(plan.replaceAll(/\s+/g, ""));
+  if (match?.[1] === undefined || match[2] === undefined) return undefined;
+  const currency = {
+    "港币": "HKD",
+    "港元": "HKD",
+    "人民币": "CNY",
+    "美元": "USD",
+  }[match[1]] as DividendComponent["currency"] | undefined;
+  return currency === undefined
+    ? undefined
+    : { currency, value: match[2] };
+}
+
+function aggregateAnnualDividends(
+  components: readonly DividendComponent[],
+): AnnualDividend[] {
+  const unique = new Map<string, DividendComponent>();
+  for (const component of components) {
+    const existing = unique.get(component.identity);
+    if (
+      existing === undefined
+      || component.availableDate > existing.availableDate
+    ) {
+      unique.set(component.identity, component);
+    }
+  }
+  const groups = new Map<string, DividendComponent[]>();
+  for (const component of unique.values()) {
+    const key = `${component.fiscalYear}:${component.currency}`;
+    const group = groups.get(key) ?? [];
+    group.push(component);
+    groups.set(key, group);
+  }
+  return [...groups.values()].map((group) => {
+    const first = group[0]!;
+    return {
+      fiscalYear: first.fiscalYear,
+      currency: first.currency,
+      value: group.reduce(
+        (total, component) => total.plus(component.value),
+        new Decimal(0),
+      ).toString(),
+      availableDate: group
+        .map((component) => component.availableDate)
+        .sort()
+        .at(-1)!,
+      identities: group.map((component) => component.identity).sort(),
+    };
+  }).sort((left, right) =>
+    right.fiscalYear - left.fiscalYear
+    || left.currency.localeCompare(right.currency)
+  );
+}
+
+function requestedDividendYears(
+  requirements: readonly FactRequirement[],
+): ReadonlySet<number> | undefined {
+  const dividends = requirements.filter((requirement) =>
+    requirement.conceptId === "distribution.dividendPerShare"
+  );
+  if (dividends.some((requirement) => requirement.period === undefined)) {
+    return undefined;
+  }
+  return new Set(dividends.flatMap((requirement) =>
+    requirement.period === undefined ? [] : [requirement.period.fiscalYear]
+  ));
+}
+
 function financialReportForConcept(
   concept: ConceptId,
 ): FinancialQuery["reportName"] | undefined {
@@ -346,7 +479,12 @@ function financialReportForConcept(
 export class EastmoneyProvider implements SourceProvider {
   readonly providerId = PROVIDER_ID;
   readonly upstreamSourceId = UPSTREAM_SOURCE_ID;
-  readonly capabilities = ["market", "financials", "valuation"] as const;
+  readonly capabilities = [
+    "market",
+    "financials",
+    "dividends",
+    "valuation",
+  ] as const;
   private readonly options: EastmoneyProviderOptions;
 
   constructor(options: EastmoneyProviderOptions = {}) {
@@ -445,6 +583,48 @@ export class EastmoneyProvider implements SourceProvider {
     url.searchParams.set("sortTypes", "-1");
     url.searchParams.set("pageSize", "1");
     url.searchParams.set("pageNumber", "1");
+    return url.toString();
+  }
+
+  private dividendUrl(
+    instrument: ProviderRequest["instrument"],
+  ): string {
+    if (instrument.exchangeMic === "XHKG") {
+      const url = new URL(
+        this.options.securitiesEndpoint ?? SECURITIES_ENDPOINT,
+      );
+      url.searchParams.set("reportName", "RPT_HKF10_MAIN_DIVBASIC");
+      url.searchParams.set(
+        "columns",
+        "SECURITY_CODE,UPDATE_DATE,NOTICE_DATE,REPORT_TYPE,"
+          + "EX_DIVIDEND_DATE,DIVIDEND_DATE,TRANSFER_END_DATE,YEAR,"
+          + "PLAN_EXPLAIN,IS_BFP",
+      );
+      url.searchParams.set(
+        "filter",
+        `(SECURITY_CODE="${instrument.symbol}")(IS_BFP="0")`,
+      );
+      url.searchParams.set("sortColumns", "NOTICE_DATE,EX_DIVIDEND_DATE");
+      url.searchParams.set("sortTypes", "-1,-1");
+      url.searchParams.set("pageSize", "200");
+      url.searchParams.set("pageNumber", "1");
+      url.searchParams.set("source", "F10");
+      url.searchParams.set("client", "PC");
+      return url.toString();
+    }
+    const url = new URL(this.options.financialEndpoint ?? FINANCIAL_ENDPOINT);
+    url.searchParams.set("reportName", "RPT_SHAREBONUS_DET");
+    url.searchParams.set("columns", "ALL");
+    url.searchParams.set(
+      "filter",
+      `(SECURITY_CODE="${instrument.symbol}")`,
+    );
+    url.searchParams.set("sortColumns", "REPORT_DATE");
+    url.searchParams.set("sortTypes", "-1");
+    url.searchParams.set("pageSize", "500");
+    url.searchParams.set("pageNumber", "1");
+    url.searchParams.set("source", "WEB");
+    url.searchParams.set("client", "WEB");
     return url.toString();
   }
 
@@ -683,6 +863,192 @@ export class EastmoneyProvider implements SourceProvider {
               message: error instanceof Error
                 ? error.message
                 : "Failed to parse Eastmoney history",
+              retryable: false,
+            });
+      }
+    }
+
+    if (requestedConcepts.has("distribution.dividendPerShare")) {
+      const sourceUrl = this.dividendUrl(request.instrument);
+      try {
+        const { parsed, snapshot } = await this.request(sourceUrl, context);
+        const result = parsed["result"];
+        if (result === null || result === undefined) {
+          throw new ProviderFailure({
+            providerId: this.providerId,
+            code: "EMPTY_RESPONSE",
+            message: asString(parsed["message"])
+              ?? "No Eastmoney dividend data",
+            retryable: false,
+          });
+        }
+        const rows = asObject(result, "Eastmoney dividend result is invalid")[
+          "data"
+        ];
+        if (!Array.isArray(rows) || rows.length === 0) {
+          throw new ProviderFailure({
+            providerId: this.providerId,
+            code: "EMPTY_RESPONSE",
+            message: "Eastmoney dividend data is empty",
+            retryable: false,
+          });
+        }
+        rawSnapshots.push(snapshot);
+        const components = rows.flatMap((item): DividendComponent[] => {
+          const row = asObject(item, "Eastmoney dividend row is invalid");
+          if (request.instrument.exchangeMic === "XHKG") {
+            const fiscalYear = Number(asString(row["YEAR"]));
+            const plan = asString(row["PLAN_EXPLAIN"]);
+            const availableDate = asString(row["UPDATE_DATE"]);
+            const parsedPlan = plan === undefined
+              ? undefined
+              : parseHongKongCashDividend(plan);
+            const isoAvailableDate = availableDate === undefined
+              ? undefined
+              : isoDate(availableDate);
+            if (
+              !Number.isInteger(fiscalYear)
+              || parsedPlan === undefined
+              || isoAvailableDate === undefined
+            ) {
+              return [];
+            }
+            return [{
+              fiscalYear,
+              currency: parsedPlan.currency,
+              value: parsedPlan.value,
+              availableDate: isoAvailableDate,
+              identity: JSON.stringify({
+                year: fiscalYear,
+                plan,
+                exDividendDate: asString(row["EX_DIVIDEND_DATE"]),
+              }),
+            }];
+          }
+          if (asString(row["ASSIGN_PROGRESS"]) !== "实施分配") return [];
+          const reportDate = asString(row["REPORT_DATE"]);
+          const noticeDate = asString(row["NOTICE_DATE"]);
+          const value = exactDecimal(row["PRETAX_BONUS_RMB"]);
+          const isoReportDate = reportDate === undefined
+            ? undefined
+            : isoDate(reportDate);
+          const availableDate = noticeDate === undefined
+            ? undefined
+            : isoDate(noticeDate);
+          if (
+            isoReportDate === undefined
+            || availableDate === undefined
+            || value === undefined
+          ) {
+            return [];
+          }
+          legalName = asString(row["SECURITY_NAME_ABBR"]) ?? legalName;
+          return [{
+            fiscalYear: Number(isoReportDate.slice(0, 4)),
+            currency: "CNY",
+            value,
+            availableDate,
+            identity: JSON.stringify({
+              reportDate: isoReportDate,
+              value,
+              exDividendDate: asString(row["EX_DIVIDEND_DATE"]),
+            }),
+          }];
+        });
+        const requestedYears = requestedDividendYears(request.requirements);
+        const dividends = aggregateAnnualDividends(components).filter(
+          (dividend) =>
+            requestedYears === undefined
+            || requestedYears.has(dividend.fiscalYear),
+        );
+        if (dividends.length === 0) {
+          throw new ProviderFailure({
+            providerId: this.providerId,
+            code: "EMPTY_RESPONSE",
+            message:
+              "Eastmoney has no implemented annual cash dividend for the request",
+            retryable: false,
+          });
+        }
+        for (const dividend of dividends) {
+          const isHongKong = request.instrument.exchangeMic === "XHKG";
+          const rawField = isHongKong
+            ? "PLAN_EXPLAIN[]"
+            : "PRETAX_BONUS_RMB[]";
+          const period = dividendPeriod(dividend.fiscalYear);
+          observations.push(ObservationSchema.parse({
+            observationId: stableId("obs", {
+              providerId: this.providerId,
+              snapshotId: snapshot.snapshotId,
+              rawField,
+              concept: "distribution.dividendPerShare",
+              period,
+              currency: dividend.currency,
+              identities: dividend.identities,
+            }),
+            companyId: request.instrument.companyId,
+            instrumentId: request.instrument.instrumentId,
+            concept: "distribution.dividendPerShare",
+            value: dividend.value,
+            unit: `${dividend.currency}-per-share`,
+            scale: isHongKong ? "1" : "0.1",
+            period,
+            basis: quoteBasis(dividend.currency),
+            availability: noticeAvailability(
+              dividend.availableDate,
+              context.now,
+            ),
+            provenance: {
+              providerId: this.providerId,
+              upstreamSourceId: this.upstreamSourceId,
+              sourceType: "aggregator",
+              sourceUrl,
+              rawSnapshotId: snapshot.snapshotId,
+              rawField,
+              extractionMethod: "api",
+              fetchedAt: context.now,
+              transformations: [
+                ...(isHongKong
+                  ? [{
+                      transformId: "parse-cash-dividend-per-share",
+                      version: "1.0.0",
+                      detail:
+                        "Parse explicit per-share cash amounts and currencies from PLAN_EXPLAIN",
+                    }]
+                  : [{
+                      transformId: "per-ten-shares",
+                      version: "1.0.0",
+                      detail:
+                        "Scale PRETAX_BONUS_RMB from cash per 10 shares to cash per share",
+                    }]),
+                {
+                  transformId: "aggregate-annual-cash-dividends",
+                  version: "1.0.0",
+                  detail:
+                    `Sum ${dividend.identities.length} implemented cash distribution(s) assigned to fiscal year ${dividend.fiscalYear}`,
+                },
+                {
+                  transformId: isHongKong
+                    ? "update-date-end-of-day"
+                    : "notice-date-end-of-day",
+                  version: "1.0.0",
+                  detail: isHongKong
+                    ? "Treat the latest UPDATE_DATE as available at end of day"
+                    : "Treat the latest NOTICE_DATE as available at end of day",
+                },
+              ],
+            },
+          }));
+        }
+      } catch (error) {
+        issues.push(error instanceof ProviderFailure
+          ? error.issue
+          : {
+              providerId: this.providerId,
+              code: "PARSE_FAILED",
+              message: error instanceof Error
+                ? error.message
+                : "Failed to parse Eastmoney dividends",
               retryable: false,
             });
       }

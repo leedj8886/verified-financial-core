@@ -243,4 +243,132 @@ describe("EastmoneyProvider", () => {
     });
     expect(atClose.observations[0]?.period.endDate).toBe("2025-07-25");
   });
+
+  it("aggregates implemented A-share cash distributions by fiscal year", async () => {
+    const fetchImplementation = vi.fn<FetchImplementation>(
+      async (input) => {
+        const url = new URL(String(input));
+        expect(url.hostname).toBe("dividends.example");
+        expect(url.searchParams.get("reportName"))
+          .toBe("RPT_SHAREBONUS_DET");
+        return new Response(await fixture("dividend-600519.json"));
+      },
+    );
+    const provider = new EastmoneyProvider({
+      fetchImplementation,
+      financialEndpoint: "https://dividends.example/a",
+      retries: 0,
+    });
+    const batch = parseProviderBatch(provider, await provider.fetch({
+      instrument: {
+        instrumentId: "XSHG:600519",
+        companyId: "company:XSHG:600519",
+        exchangeMic: "XSHG",
+        symbol: "600519",
+        shareClass: "A",
+        tradingCurrency: "CNY",
+      },
+      requirements: [{
+        conceptId: "distribution.dividendPerShare",
+        required: true,
+        period: { fiscalYear: 2024, presentation: "annual" },
+      }],
+      asOf: "2026-07-28T23:59:59+08:00",
+      offline: false,
+    }, {
+      signal: new AbortController().signal,
+      now: "2026-07-28T10:00:00+08:00",
+      snapshots,
+    }));
+
+    expect(batch.issues).toEqual([]);
+    expect(batch.company.legalName).toBe("贵州茅台");
+    expect(batch.rawSnapshots).toHaveLength(1);
+    expect(batch.observations).toEqual([
+      expect.objectContaining({
+        concept: "distribution.dividendPerShare",
+        value: "515.55",
+        unit: "CNY-per-share",
+        scale: "0.1",
+        period: {
+          kind: "duration",
+          startDate: "2024-01-01",
+          endDate: "2024-12-31",
+          fiscalYear: 2024,
+          presentation: "annual",
+        },
+        availability: expect.objectContaining({
+          publishedAt: "2025-06-20T23:59:59+08:00",
+        }),
+        provenance: expect.objectContaining({
+          rawField: "PRETAX_BONUS_RMB[]",
+          transformations: expect.arrayContaining([
+            expect.objectContaining({ transformId: "per-ten-shares" }),
+            expect.objectContaining({
+              transformId: "aggregate-annual-cash-dividends",
+            }),
+          ]),
+        }),
+      }),
+    ]);
+  });
+
+  it("parses Hong Kong cash dividends and excludes non-cash distributions", async () => {
+    const provider = new EastmoneyProvider({
+      fetchImplementation: async (input) => {
+        const url = new URL(String(input));
+        expect(url.searchParams.get("reportName"))
+          .toBe("RPT_HKF10_MAIN_DIVBASIC");
+        return new Response(await fixture("dividend-00700.json"));
+      },
+      securitiesEndpoint: "https://dividends.example/h",
+      retries: 0,
+    });
+    const batch = parseProviderBatch(provider, await provider.fetch({
+      instrument: {
+        instrumentId: "XHKG:00700",
+        companyId: "company:XHKG:00700",
+        exchangeMic: "XHKG",
+        symbol: "00700",
+        shareClass: "H",
+        tradingCurrency: "HKD",
+      },
+      requirements: [{
+        conceptId: "distribution.dividendPerShare",
+        required: true,
+        period: { fiscalYear: 2024, presentation: "annual" },
+      }],
+      asOf: "2026-07-28T23:59:59+08:00",
+      offline: false,
+    }, {
+      signal: new AbortController().signal,
+      now: "2026-07-28T10:00:00+08:00",
+      snapshots,
+    }));
+
+    expect(batch.issues).toEqual([]);
+    expect(batch.observations).toEqual([
+      expect.objectContaining({
+        concept: "distribution.dividendPerShare",
+        value: "4.5",
+        unit: "HKD-per-share",
+        scale: "1",
+        period: expect.objectContaining({
+          fiscalYear: 2024,
+          presentation: "annual",
+        }),
+        availability: expect.objectContaining({
+          publishedAt: "2025-05-14T23:59:59+08:00",
+        }),
+        provenance: expect.objectContaining({
+          rawField: "PLAN_EXPLAIN[]",
+          transformations: expect.arrayContaining([
+            expect.objectContaining({
+              transformId: "parse-cash-dividend-per-share",
+            }),
+          ]),
+        }),
+      }),
+    ]);
+  });
 });
