@@ -1,0 +1,56 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { describe, expect, it } from "vitest";
+import {
+  createDefaultProviders,
+  createLocalGateway,
+} from "./index.js";
+
+describe("local Gateway runtime", () => {
+  it("registers five token-free public and official sources by default", () => {
+    const providers = createDefaultProviders();
+    expect(providers.map((provider) => provider.providerId))
+      .toEqual([
+        "eastmoney-direct",
+        "cninfo-direct",
+        "hkex-direct",
+        "tencent-direct",
+        "baidu-direct",
+      ]);
+    for (
+      const providerId of [
+        "eastmoney-direct",
+        "cninfo-direct",
+        "hkex-direct",
+      ]
+    ) {
+      expect(
+        providers.find((provider) =>
+          provider.providerId === providerId
+        )?.capabilities,
+      ).toContain("dividends");
+    }
+  });
+
+  it("creates a closeable local SDK runtime without network access", () => {
+    const directory = mkdtempSync(join(tmpdir(), "verified-local-gateway-"));
+    const local = createLocalGateway(directory, []);
+    try {
+      expect(local.gateway.doctor()).toMatchObject({
+        schemaVersion: "1.0.0",
+        providers: [],
+        storage: {
+          databasePath: join(directory, "metadata.sqlite"),
+          snapshotCount: 0,
+          factSetCount: 0,
+          providerRequestCount: 0,
+          cacheEntryCount: 0,
+        },
+      });
+    } finally {
+      local.close();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+});

@@ -29,33 +29,15 @@ importers:
 
   apps/ah-gateway-cli:
     dependencies:
-      '@verified-financial/provider-baidu':
+      '@verified-financial/local-gateway':
         specifier: workspace:*
-        version: link:../../packages/provider-baidu
-      '@verified-financial/provider-cninfo':
-        specifier: workspace:*
-        version: link:../../packages/provider-cninfo
-      '@verified-financial/provider-contract':
-        specifier: workspace:*
-        version: link:../../packages/provider-contract
-      '@verified-financial/provider-eastmoney':
-        specifier: workspace:*
-        version: link:../../packages/provider-eastmoney
-      '@verified-financial/provider-hkex':
-        specifier: workspace:*
-        version: link:../../packages/provider-hkex
-      '@verified-financial/provider-tencent':
-        specifier: workspace:*
-        version: link:../../packages/provider-tencent
+        version: link:../../packages/local-gateway
       '@verified-financial/schema':
         specifier: workspace:*
         version: link:../../packages/schema
       '@verified-financial/sdk':
         specifier: workspace:*
         version: link:../../packages/sdk
-      '@verified-financial/storage':
-        specifier: workspace:*
-        version: link:../../packages/storage
     devDependencies:
       tsup:
         specifier: ^8.0.0
@@ -79,6 +61,43 @@ importers:
       fast-check:
         specifier: ^4.0.0
         version: 4.9.0
+      tsup:
+        specifier: ^8.0.0
+        version: 8.5.1(typescript@5.9.3)
+      typescript:
+        specifier: ^5.9.0
+        version: 5.9.3
+      vitest:
+        specifier: ^3.2.0
+        version: 3.2.7(@types/node@22.20.1)
+
+  packages/local-gateway:
+    dependencies:
+      '@verified-financial/provider-baidu':
+        specifier: workspace:*
+        version: link:../provider-baidu
+      '@verified-financial/provider-cninfo':
+        specifier: workspace:*
+        version: link:../provider-cninfo
+      '@verified-financial/provider-contract':
+        specifier: workspace:*
+        version: link:../provider-contract
+      '@verified-financial/provider-eastmoney':
+        specifier: workspace:*
+        version: link:../provider-eastmoney
+      '@verified-financial/provider-hkex':
+        specifier: workspace:*
+        version: link:../provider-hkex
+      '@verified-financial/provider-tencent':
+        specifier: workspace:*
+        version: link:../provider-tencent
+      '@verified-financial/sdk':
+        specifier: workspace:*
+        version: link:../sdk
+      '@verified-financial/storage':
+        specifier: workspace:*
+        version: link:../storage
+    devDependencies:
       tsup:
         specifier: ^8.0.0
         version: 8.5.1(typescript@5.9.3)

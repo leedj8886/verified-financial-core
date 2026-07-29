@@ -13,15 +13,9 @@
     "typecheck:local": "tsc --noEmit"
   },
   "dependencies": {
-    "@verified-financial/provider-baidu": "workspace:*",
-    "@verified-financial/provider-cninfo": "workspace:*",
-    "@verified-financial/provider-contract": "workspace:*",
-    "@verified-financial/provider-eastmoney": "workspace:*",
-    "@verified-financial/provider-hkex": "workspace:*",
-    "@verified-financial/provider-tencent": "workspace:*",
+    "@verified-financial/local-gateway": "workspace:*",
     "@verified-financial/schema": "workspace:*",
-    "@verified-financial/sdk": "workspace:*",
-    "@verified-financial/storage": "workspace:*"
+    "@verified-financial/sdk": "workspace:*"
   },
   "devDependencies": {
     "tsup": "^8.0.0",

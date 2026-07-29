@@ -103,6 +103,23 @@ pnpm --silent ah-context doctor
 pnpm --silent ah-context resolve 600519.SH
 ```
 
+TypeScript clients use the same local runtime as the CLI:
+
+```ts
+import { createLocalGateway } from "@verified-financial/local-gateway";
+
+const local = createLocalGateway("./data");
+try {
+  const factSet = await local.gateway.facts(request);
+  // Pass the frozen FactSet to Dexter, AI Berkshire, or Research CI.
+} finally {
+  local.close();
+}
+```
+
+The shared runtime owns the default Provider registration and local snapshot
+stores. Client adapters must not recreate that data-routing layer.
+
 Request facts:
 
 ```bash
