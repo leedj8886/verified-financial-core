@@ -26,7 +26,7 @@ import { extractText, getDocumentProxy } from "unpdf";
 
 const PROVIDER_ID = "cninfo-direct";
 const UPSTREAM_SOURCE_ID = "cninfo";
-const MAPPING_VERSION = "cninfo@1.1.0";
+const MAPPING_VERSION = "cninfo@1.2.0";
 const API_BASE = "https://www.cninfo.com.cn/new/";
 const WEBAPI_BASE = "https://webapi.cninfo.com.cn/";
 const PDF_BASE = "https://static.cninfo.com.cn/";
@@ -75,7 +75,7 @@ interface FieldDefinition {
   concept: ConceptId;
   statement: StatementKind;
   rawField: string;
-  patterns: RegExp[];
+  labels: RegExp[];
   attribution?: AccountingBasis["attribution"];
 }
 
@@ -102,41 +102,61 @@ export interface CninfoProviderOptions {
   pdfBase?: string;
 }
 
+export interface FinancialExtractionPeriod {
+  fiscalYear: number;
+  fiscalQuarter?: 1 | 2 | 3 | 4;
+  presentation: "annual" | "ytd";
+}
+
+export interface FinancialExtractionEvidence {
+  pageNumber: number;
+  rawSnippet: string;
+}
+
+export interface FinancialColumnExtraction {
+  current: Partial<Record<ConceptId, string>>;
+  comparative: Partial<Record<ConceptId, string>>;
+  currentEvidence: Partial<Record<ConceptId, FinancialExtractionEvidence>>;
+  comparativeEvidence: Partial<
+    Record<ConceptId, FinancialExtractionEvidence>
+  >;
+}
+
 const fieldDefinitions: readonly FieldDefinition[] = [
   {
     concept: "income.revenue",
     statement: "income",
     rawField: "合并利润表.营业总收入",
-    patterns: [
-      /一、?营业总收入[^0-9]{0,20}([+-]?\d[\d,]*\.\d+)/,
-      /营业总收入[^0-9]{0,20}([+-]?\d[\d,]*\.\d+)/,
+    labels: [
+      /一、?营业总收入/,
+      /营业总收入/,
     ],
   },
   {
     concept: "income.operatingProfit",
     statement: "income",
     rawField: "合并利润表.营业利润",
-    patterns: [
-      /三、?营业利润[^0-9]{0,50}([+-]?\d[\d,]*\.\d+)/,
-      /营业利润[^0-9]{0,50}([+-]?\d[\d,]*\.\d+)/,
+    labels: [
+      /三、?营业利润/,
+      /营业利润/,
     ],
   },
   {
     concept: "income.netProfit",
     statement: "income",
     rawField: "合并利润表.净利润",
-    patterns: [
-      /五、?净利润[^0-9]{0,50}([+-]?\d[\d,]*\.\d+)/,
-      /净利润[^0-9]{0,50}([+-]?\d[\d,]*\.\d+)/,
+    labels: [
+      /五、?净利润/,
+      /净利润/,
     ],
   },
   {
     concept: "income.netProfitParent",
     statement: "income",
     rawField: "合并利润表.归属于母公司股东的净利润",
-    patterns: [
-      /归属于母公司(?:股东|所有者)的净利润[^0-9]{0,60}([+-]?\d[\d,]*\.\d+)/,
-      /归属于上市公司股东的净利润[^0-9]{0,60}([+-]?\d[\d,]*\.\d+)/,
+    labels: [
+      /归属于母公司(?:股东|所有者)的净利润/,
+      /归属于上市公司股东的净利润/,
     ],
     attribution: "parent",
   },
@@ -144,22 +164,22 @@ const fieldDefinitions: readonly FieldDefinition[] = [
     concept: "balance.assets",
     statement: "balance",
     rawField: "合并资产负债表.资产总计",
-    patterns: [/资产总计[^0-9]{0,20}([+-]?\d[\d,]*\.\d+)/],
+    labels: [/资产总计/],
   },
   {
     concept: "balance.liabilities",
     statement: "balance",
     rawField: "合并资产负债表.负债合计",
-    patterns: [
-      /(?<!流动)(?<!非流动)负债合计[^0-9]{0,20}([+-]?\d[\d,]*\.\d+)/,
+    labels: [
+      /(?<!流动)(?<!非流动)负债合计/,
     ],
   },
   {
     concept: "balance.equity",
     statement: "balance",
     rawField: "合并资产负债表.所有者权益合计",
-    patterns: [
-      /所有者权益(?:\(或股东权益\))?合计[^0-9]{0,20}([+-]?\d[\d,]*\.\d+)/,
+    labels: [
+      /所有者权益(?:\(或股东权益\))?合计/,
     ],
     attribution: "all-shareholders",
   },
@@ -167,26 +187,20 @@ const fieldDefinitions: readonly FieldDefinition[] = [
     concept: "balance.cash",
     statement: "balance",
     rawField: "合并资产负债表.货币资金",
-    patterns: [
-      /货币资金\s+(?:\d{1,3}\s+)?([+-]?\d[\d,]*\.\d+)/,
-    ],
+    labels: [/货币资金/],
   },
   {
     concept: "cashFlow.operatingCashFlow",
     statement: "cashFlow",
     rawField: "合并现金流量表.经营活动产生的现金流量净额",
-    patterns: [
-      /经营活动产生的现金流量净额[^0-9]{0,20}([+-]?\d[\d,]*\.\d+)/,
-    ],
+    labels: [/经营活动产生的现金流量净额/],
   },
   {
     concept: "cashFlow.capex",
     statement: "cashFlow",
     rawField:
       "合并现金流量表.购建固定资产、无形资产和其他长期资产支付的现金",
-    patterns: [
-      /购建固定资产、?无形资产和其他长期资产支付的现金[^0-9]{0,20}([+-]?\d[\d,]*\.\d+)/,
-    ],
+    labels: [/购建固定资产、?无形资产和其他长期资产支付的现金/],
   },
 ] as const;
 
@@ -209,7 +223,10 @@ export const CNINFO_FIELD_MAPPINGS: readonly SourceFieldMapping[] = [
     conceptId: field.concept,
     unit: "currency",
     scale: "1",
-    transformIds: ["pdf-text-extract", "consolidated-statement-label-match"],
+    transformIds: [
+      "pdf-text-extract",
+      "consolidated-statement-column-match",
+    ],
   })),
 ];
 
@@ -534,50 +551,250 @@ function groupRequirements(
   );
 }
 
+function comparativeRequirements(
+  requirements: readonly FactRequirement[],
+  query: FilingQuery,
+): FactRequirement[] {
+  return requirements.filter((requirement) => {
+    const period = requirement.period;
+    return definitionsByConcept.has(requirement.conceptId)
+      && period !== undefined
+      && period.fiscalYear === query.fiscalYear - 1
+      && period.fiscalQuarter === query.fiscalQuarter
+      && period.presentation === query.presentation;
+  });
+}
+
 function normalizePdfText(value: string): string {
   return value.normalize("NFKC")
-    .replace(/[−–—]/g, "-")
+    .replace(/[−–—－]/g, "-")
     .replace(/(?<=[\p{Script=Han}])\s+(?=[\p{Script=Han}])/gu, "")
     .replace(/\s+/g, " ");
 }
 
-function extractStatement(
-  pages: readonly string[],
-  statement: StatementKind,
-): string | undefined {
-  const boundary = statementBoundaries[statement];
-  const joined = pages.join("\n");
-  const start = joined.indexOf(boundary.start);
-  if (start < 0) return undefined;
-  const end = joined.indexOf(boundary.end, start + boundary.start.length);
-  return normalizePdfText(
-    joined.slice(start, end < 0 ? joined.length : end),
+interface StatementCandidate {
+  pageNumber: number;
+  text: string;
+  pageOffsets: Array<{ offset: number; pageNumber: number }>;
+}
+
+const DECIMAL_TOKEN =
+  /(?:\(\s*\+?\s*\d(?:[\d,\s]*\d)?\s*\.\s*\d+\s*\)|[+-]\s*\d(?:[\d,\s]*\d)?\s*\.\s*\d+|\d[\d,]*\s*\.\s*\d+)/g;
+
+function exactHeadingPattern(heading: string): RegExp {
+  return new RegExp(
+    `^\\s*(?:[一二三四五六七八九十\\d]+[、.．]\\s*)?${heading}\\s*$`,
+    "m",
   );
 }
 
-export function extractFinancialValues(
+function statementCandidates(
   pages: readonly string[],
-): Partial<Record<ConceptId, string>> {
-  const sections = new Map<StatementKind, string | undefined>();
-  const values: Partial<Record<ConceptId, string>> = {};
+  statement: StatementKind,
+): StatementCandidate[] {
+  const boundary = statementBoundaries[statement];
+  const startPattern = exactHeadingPattern(boundary.start);
+  const endPattern = exactHeadingPattern(boundary.end);
+  const candidates: StatementCandidate[] = [];
+  for (let pageIndex = 0; pageIndex < pages.length; pageIndex += 1) {
+    const page = pages[pageIndex]!.normalize("NFKC");
+    const start = startPattern.exec(page);
+    if (start === null) continue;
+    const sectionPages: string[] = [page.slice(start.index)];
+    for (
+      let nextPageIndex = pageIndex + 1;
+      nextPageIndex < pages.length
+        && nextPageIndex <= pageIndex + 12;
+      nextPageIndex += 1
+    ) {
+      const nextPage = pages[nextPageIndex]!.normalize("NFKC");
+      const end = endPattern.exec(nextPage);
+      if (end !== null) {
+        sectionPages.push(nextPage.slice(0, end.index));
+        break;
+      }
+      sectionPages.push(nextPage);
+    }
+    const firstPageEnd = endPattern.exec(sectionPages[0]!);
+    if (firstPageEnd !== null) {
+      sectionPages[0] = sectionPages[0]!.slice(0, firstPageEnd.index);
+    }
+    const normalizedPages = sectionPages.map(normalizePdfText);
+    const pageOffsets: StatementCandidate["pageOffsets"] = [];
+    let text = "";
+    for (const [offset, normalizedPage] of normalizedPages.entries()) {
+      if (text.length > 0) text += " ";
+      pageOffsets.push({
+        offset: text.length,
+        pageNumber: pageIndex + offset + 1,
+      });
+      text += normalizedPage;
+    }
+    candidates.push({ pageNumber: pageIndex + 1, text, pageOffsets });
+  }
+  return candidates;
+}
+
+function parseDecimalToken(raw: string): string {
+  const normalized = raw.normalize("NFKC").replace(/[−–—－]/g, "-").trim();
+  const parenthesized = normalized.startsWith("(")
+    && normalized.endsWith(")");
+  const unsigned = normalized
+    .replace(/^\(\s*/, "")
+    .replace(/\s*\)$/, "")
+    .replaceAll(",", "")
+    .replace(/\s+/g, "")
+    .replace(/^\+/, "");
+  return parenthesized && !unsigned.startsWith("-")
+    ? `-${unsigned}`
+    : unsigned;
+}
+
+function extractRow(
+  section: StatementCandidate,
+  field: FieldDefinition,
+): {
+  current?: string;
+  comparative?: string;
+  currentEvidence?: FinancialExtractionEvidence;
+  comparativeEvidence?: FinancialExtractionEvidence;
+} {
+  for (const label of field.labels) {
+    const match = label.exec(section.text);
+    if (match === null) continue;
+    const valueWindow = section.text.slice(
+      match.index + match[0].length,
+      match.index + match[0].length + 240,
+    );
+    const tokens = [...valueWindow.matchAll(DECIMAL_TOKEN)].slice(0, 2);
+    const current = tokens[0];
+    if (current === undefined) continue;
+    const snippetEnd = match.index + match[0].length
+      + (tokens.at(-1)?.index ?? 0)
+      + (tokens.at(-1)?.[0].length ?? 0);
+    const rawSnippet = section.text.slice(match.index, snippetEnd).trim();
+    const pageNumber = [...section.pageOffsets]
+      .reverse()
+      .find((item) => item.offset <= match.index)?.pageNumber
+      ?? section.pageNumber;
+    return {
+      current: parseDecimalToken(current[0]),
+      currentEvidence: {
+        pageNumber,
+        rawSnippet,
+      },
+      ...(tokens[1] === undefined
+        ? {}
+        : {
+            comparative: parseDecimalToken(tokens[1]![0]),
+            comparativeEvidence: {
+              pageNumber,
+              rawSnippet,
+            },
+          }),
+    };
+  }
+  return {};
+}
+
+function expectedPeriodTokens(period: FinancialExtractionPeriod): string[] {
+  if (period.presentation === "annual") {
+    return [
+      `${period.fiscalYear}年度`,
+      `${period.fiscalYear}年1-12月`,
+      `${period.fiscalYear}年1—12月`,
+      `${period.fiscalYear}年12月31日`,
+    ];
+  }
+  const quarter = period.fiscalQuarter;
+  if (quarter === undefined) return [`${period.fiscalYear}年`];
+  const quarterTokens = {
+    1: ["第一季度", "1-3月", "1—3月", "3月31日"],
+    2: ["半年度", "1-6月", "1—6月", "6月30日"],
+    3: ["第三季度", "1-9月", "1—9月", "9月30日"],
+    4: ["年度", "1-12月", "1—12月", "12月31日"],
+  }[quarter];
+  return quarterTokens.map((token) => `${period.fiscalYear}年${token}`);
+}
+
+function selectStatement(
+  pages: readonly string[],
+  statement: StatementKind,
+  expectedPeriod: FinancialExtractionPeriod | undefined,
+): StatementCandidate | undefined {
+  const fields = fieldDefinitions.filter((field) =>
+    field.statement === statement
+  );
+  return statementCandidates(pages, statement)
+    .map((candidate) => {
+      const coverage = fields.filter((field) =>
+        extractRow(candidate, field).current !== undefined
+      ).length;
+      const periodScore = expectedPeriod === undefined
+        ? 0
+        : expectedPeriodTokens(expectedPeriod).some((token) =>
+            candidate.text.includes(token)
+          )
+          ? 100
+          : 0;
+      const correctionPenalty =
+        /更正前\s+更正金额\s+更正后/.test(candidate.text.slice(0, 800))
+          ? 200
+          : 0;
+      return {
+        candidate,
+        score: periodScore + coverage * 10 - correctionPenalty,
+      };
+    })
+    .sort((left, right) =>
+      right.score - left.score
+      || left.candidate.pageNumber - right.candidate.pageNumber
+    )[0]?.candidate;
+}
+
+export function extractFinancialColumns(
+  pages: readonly string[],
+  expectedPeriod?: FinancialExtractionPeriod,
+): FinancialColumnExtraction {
+  const sections = new Map<StatementKind, StatementCandidate | undefined>();
+  const result: FinancialColumnExtraction = {
+    current: {},
+    comparative: {},
+    currentEvidence: {},
+    comparativeEvidence: {},
+  };
   for (const field of fieldDefinitions) {
     if (!sections.has(field.statement)) {
       sections.set(
         field.statement,
-        extractStatement(pages, field.statement),
+        selectStatement(pages, field.statement, expectedPeriod),
       );
     }
     const section = sections.get(field.statement);
     if (section === undefined) continue;
-    for (const pattern of field.patterns) {
-      const match = pattern.exec(section);
-      if (match?.[1] !== undefined) {
-        values[field.concept] = match[1].replaceAll(",", "");
-        break;
+    const extracted = extractRow(section, field);
+    if (extracted.current !== undefined) {
+      result.current[field.concept] = extracted.current;
+      if (extracted.currentEvidence !== undefined) {
+        result.currentEvidence[field.concept] = extracted.currentEvidence;
+      }
+    }
+    if (extracted.comparative !== undefined) {
+      result.comparative[field.concept] = extracted.comparative;
+      if (extracted.comparativeEvidence !== undefined) {
+        result.comparativeEvidence[field.concept] =
+          extracted.comparativeEvidence;
       }
     }
   }
-  return values;
+  return result;
+}
+
+export function extractFinancialValues(
+  pages: readonly string[],
+  expectedPeriod?: FinancialExtractionPeriod,
+): Partial<Record<ConceptId, string>> {
+  return extractFinancialColumns(pages, expectedPeriod).current;
 }
 
 function statementPeriod(
@@ -1070,7 +1287,8 @@ export class CninfoProvider implements SourceProvider {
           });
           continue;
         }
-        const filing = await this.readFiling(found.announcement, context);
+        const announcement = found.announcement;
+        const filing = await this.readFiling(announcement, context);
         rawSnapshots.push(filing.snapshot);
         if (filing.issue !== undefined || filing.pages === undefined) {
           issues.push(filing.issue ?? {
@@ -1081,18 +1299,30 @@ export class CninfoProvider implements SourceProvider {
           });
           continue;
         }
-        const values = extractFinancialValues(filing.pages);
-        const filingDate = chinaDate(found.announcement.announcementTime);
+        const extraction = extractFinancialColumns(filing.pages, query);
+        const filingDate = chinaDate(announcement.announcementTime);
         const publishedAt = publishedAtEndOfDay(
-          found.announcement.announcementTime,
+          announcement.announcementTime,
         );
-        for (const requirement of query.requirements) {
+        const emitObservation = (
+          requirement: FactRequirement,
+          column: "current" | "comparative",
+        ): void => {
           const field = definitionsByConcept.get(requirement.conceptId)!;
+          const values = column === "current"
+            ? extraction.current
+            : extraction.comparative;
+          const evidence = (
+            column === "current"
+              ? extraction.currentEvidence
+              : extraction.comparativeEvidence
+          )[requirement.conceptId];
           const value = values[requirement.conceptId];
           if (value === undefined) {
+            if (column === "comparative") return;
             unmapped.push(UnmappedObservationSchema.parse({
               unmappedId: stableId("unmapped", {
-                documentId: found.announcement.announcementId,
+                documentId: announcement.announcementId,
                 rawField: field.rawField,
                 requirement,
               }),
@@ -1103,19 +1333,23 @@ export class CninfoProvider implements SourceProvider {
               rawValue: null,
               reasonCode: "UNMAPPED_SOURCE_FIELD",
             }));
-            continue;
+            return;
           }
+          const periodQuery = column === "current"
+            ? query
+            : { ...query, fiscalYear: query.fiscalYear - 1 };
           const period = statementPeriod(
-            query,
+            periodQuery,
             field.statement === "balance" ? "instant" : "duration",
           );
           observations.push(ObservationSchema.parse({
             observationId: stableId("obs", {
               providerId: this.providerId,
-              documentId: found.announcement.announcementId,
+              documentId: announcement.announcementId,
               rawField: field.rawField,
               concept: field.concept,
               period,
+              column,
             }),
             companyId: request.instrument.companyId,
             concept: field.concept,
@@ -1142,10 +1376,12 @@ export class CninfoProvider implements SourceProvider {
               providerId: this.providerId,
               upstreamSourceId: this.upstreamSourceId,
               sourceType: "official",
-              documentId: found.announcement.announcementId,
+              documentId: announcement.announcementId,
               sourceUrl: filing.sourceUrl,
               rawSnapshotId: filing.snapshot.snapshotId,
-              rawField: field.rawField,
+              rawField: column === "current"
+                ? field.rawField
+                : `${field.rawField}.上年同期`,
               extractionMethod: "pdf",
               fetchedAt: context.now,
               transformations: [
@@ -1155,10 +1391,23 @@ export class CninfoProvider implements SourceProvider {
                   detail: "Extract text with unpdf using bundled CJK maps",
                 },
                 {
-                  transformId: "consolidated-statement-label-match",
-                  version: "1.0.0",
-                  detail: "Read the first reported value from the consolidated statement section",
+                  transformId: "consolidated-statement-column-match",
+                  version: "2.0.0",
+                  detail: [
+                    `Read the ${column} column from the selected consolidated statement`,
+                    evidence === undefined
+                      ? undefined
+                      : `PDF page ${evidence.pageNumber}: ${evidence.rawSnippet}`,
+                  ].filter((item) => item !== undefined).join("; "),
                 },
+                ...(column === "comparative"
+                  ? [{
+                      transformId: "latest-filing-comparative-period",
+                      version: "1.0.0",
+                      detail:
+                        `Use the ${query.fiscalYear} filing's reported comparative column for fiscal year ${query.fiscalYear - 1}`,
+                    }]
+                  : []),
                 {
                   transformId: "announcement-date-end-of-day",
                   version: "1.0.0",
@@ -1167,6 +1416,17 @@ export class CninfoProvider implements SourceProvider {
               ],
             },
           }));
+        };
+        for (const requirement of query.requirements) {
+          emitObservation(requirement, "current");
+        }
+        for (
+          const requirement of comparativeRequirements(
+            request.requirements,
+            query,
+          )
+        ) {
+          emitObservation(requirement, "comparative");
         }
       } catch (error) {
         issues.push(error instanceof ProviderFailure

@@ -164,6 +164,9 @@ Historical daily closes use the latest trading day at or before `asOf`, so a
 weekend request may return the preceding Friday. Mainland daily closes are
 conservatively available from 15:30 +08:00 and Hong Kong closes from 16:30
 +08:00. Same-calendar-day requests continue to use the current quote path.
+Historical market cap is unavailable unless shares outstanding exist for the
+same point in time. The Gateway will not multiply a historical close by the
+latest share count.
 
 Request the implemented cash dividend per share assigned to a fiscal year:
 
@@ -218,6 +221,13 @@ Every derived fact records its formula and input Fact/Observation lineage.
 Direct usable facts always take precedence. Missing or incompatible inputs
 fail closed with `DERIVATION_UNAVAILABLE:<concept>`; ROE, EPS-based P/E, and
 other non-additive ratios are intentionally not inferred.
+
+For a period restated by a later filing, verification uses the latest
+publication from each upstream source while retaining all superseded
+Observation IDs in lineage. CNINFO YTD reports expose both the current and
+comparative columns so TTM uses the later filing's comparable prior period.
+Any discrepancy above 5% between independent sources fails closed, including
+when one source is official; it cannot feed a derived fact until resolved.
 
 ## Packages
 

@@ -1,0 +1,16 @@
+{
+  "totalAnnouncement": 1,
+  "totalRecordNum": 1,
+  "announcements": [
+    {
+      "secCode": "600150",
+      "secName": "中国船舶",
+      "orgId": "gssh0600150",
+      "announcementId": "1225261166",
+      "announcementTitle": "中国船舶2026年第一季度报告",
+      "announcementTime": 1777478400000,
+      "adjunctUrl": "finalpage/2026-04-30/1225261166.PDF",
+      "adjunctType": "PDF"
+    }
+  ]
+}

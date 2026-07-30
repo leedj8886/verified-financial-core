@@ -28,10 +28,11 @@ describe("foundation Golden Corpus", () => {
       .toBe("warning");
   });
 
-  it("preserves an official conflict", () => {
+  it("fails closed on an official conflict", () => {
     expect(verifyObservations(loadFixture("official-conflict")))
       .toMatchObject({
-        status: "warning",
+        status: "failed",
+        usable: false,
         reasonCodes: ["OFFICIAL_OVERRIDE_SOURCE_CONFLICT"],
       });
   });

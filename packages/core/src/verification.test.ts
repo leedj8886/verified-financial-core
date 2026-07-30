@@ -85,7 +85,7 @@ describe("cross-source verification", () => {
     });
   });
 
-  it("uses official value but preserves a material conflict", () => {
+  it("fails closed on a material official-source conflict", () => {
     const fact = verifyAndMaterializeFact([
       makeObservation({
         observationId: "eastmoney",
@@ -102,9 +102,51 @@ describe("cross-source verification", () => {
     ]);
     expect(fact).toMatchObject({
       value: "110000",
-      status: "warning",
-      usable: true,
+      status: "failed",
+      usable: false,
       reasonCodes: ["OFFICIAL_OVERRIDE_SOURCE_CONFLICT"],
+    });
+  });
+
+  it("uses the latest revision published by each upstream source", () => {
+    const fact = verifyAndMaterializeFact([
+      makeObservation({
+        observationId: "cninfo-original",
+        value: "50",
+        upstreamSourceId: "cninfo",
+        sourceType: "official",
+        availability: {
+          publishedAt: "2025-04-30T23:59:59+08:00",
+        },
+      }),
+      makeObservation({
+        observationId: "cninfo-comparative-restatement",
+        value: "100",
+        upstreamSourceId: "cninfo",
+        sourceType: "official",
+        availability: {
+          publishedAt: "2026-04-30T23:59:59+08:00",
+          sourceAsOf: "2026-04-30T23:59:59+08:00",
+        },
+      }),
+      makeObservation({
+        observationId: "eastmoney-restatement",
+        value: "100",
+        upstreamSourceId: "eastmoney",
+        availability: {
+          publishedAt: "2026-04-30T23:59:59+08:00",
+        },
+      }),
+    ]);
+    expect(fact).toMatchObject({
+      value: "100",
+      status: "verified",
+      usable: true,
+      observationIds: [
+        "cninfo-comparative-restatement",
+        "cninfo-original",
+        "eastmoney-restatement",
+      ],
     });
   });
 

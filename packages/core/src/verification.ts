@@ -28,6 +28,34 @@ function sourceRank(observation: Observation): number {
   return 2;
 }
 
+function revisionTimestamp(observation: Observation): number {
+  const value = observation.availability.sourceAsOf
+    ?? observation.availability.publishedAt
+    ?? observation.availability.fetchedAt;
+  return Date.parse(value);
+}
+
+function latestRevisionsByUpstream(
+  observations: readonly Observation[],
+): Observation[] {
+  const latest = new Map<string, Observation>();
+  for (const observation of observations) {
+    const upstream = observation.provenance.upstreamSourceId;
+    const existing = latest.get(upstream);
+    if (
+      existing === undefined
+      || revisionTimestamp(observation) > revisionTimestamp(existing)
+      || (
+        revisionTimestamp(observation) === revisionTimestamp(existing)
+        && observation.observationId.localeCompare(existing.observationId) < 0
+      )
+    ) {
+      latest.set(upstream, observation);
+    }
+  }
+  return [...latest.values()];
+}
+
 function maximumDiscrepancyPercent(
   observations: readonly Observation[],
 ): Decimal {
@@ -49,7 +77,8 @@ export function verifyObservations(
   if (observations.length === 0) {
     throw new Error("verifyObservations requires at least one observation");
   }
-  const ordered = [...observations].sort(
+  const activeRevisions = latestRevisionsByUpstream(observations);
+  const ordered = [...activeRevisions].sort(
     (left, right) => sourceRank(left) - sourceRank(right)
       || left.provenance.upstreamSourceId.localeCompare(
         right.provenance.upstreamSourceId,
@@ -83,14 +112,17 @@ export function verifyObservations(
     usable = false;
     reasonCodes = ["UNRESOLVED_SOURCE_CONFLICT"];
   } else if (maximum.gt(5)) {
-    status = "warning";
+    status = "failed";
+    usable = false;
     reasonCodes = ["OFFICIAL_OVERRIDE_SOURCE_CONFLICT"];
   } else if (maximum.gt(1)) {
     status = "warning";
     reasonCodes = ["SOURCE_DISCREPANCY"];
   }
 
-  const observationIds = ordered.map((item) => item.observationId).sort();
+  const observationIds = observations
+    .map((item) => item.observationId)
+    .sort();
   const payload = JSON.stringify({
     observationIds,
     status,

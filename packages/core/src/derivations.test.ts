@@ -116,6 +116,25 @@ describe("deterministic financial derivations", () => {
     });
   });
 
+  it("rejects historical market cap built with current shares", () => {
+    expect(() => deriveMarketCap(
+      makeFact({
+        concept: "market.price.close",
+        value: "10.5",
+        unit: "CNY",
+        fiscalYear: 2024,
+        period: { endDate: "2024-08-30" },
+      }),
+      makeFact({
+        concept: "market.shares.outstanding",
+        value: "1000000000",
+        unit: "shares",
+        fiscalYear: 2026,
+        period: { endDate: "2026-07-29" },
+      }),
+    )).toThrow("INCOMPATIBLE_DERIVATION_INPUTS");
+  });
+
   it("rejects zero ROE and PE denominators", () => {
     expect(() => deriveRoe({
       netProfit: makeFact({ concept: "income.netProfitParent" }),

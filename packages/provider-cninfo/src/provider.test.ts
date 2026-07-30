@@ -9,6 +9,7 @@ import {
 import { describe, expect, it, vi } from "vitest";
 import {
   CninfoProvider,
+  extractFinancialColumns,
   extractFinancialValues,
 } from "./provider.js";
 
@@ -78,6 +79,160 @@ describe("CninfoProvider", () => {
       "cashFlow.operatingCashFlow": "61522204989.35",
       "cashFlow.capex": "3127594916.41",
     });
+  });
+
+  it("preserves ASCII, Unicode, spaced, and parenthesized negative values", async () => {
+    const text = await fixture("negative-number-formats.txt");
+    expect(extractFinancialValues([text], {
+      fiscalYear: 2025,
+      presentation: "annual",
+    })).toMatchObject({
+      "income.revenue": "-1234567.89",
+      "income.operatingProfit": "-44114192.78",
+      "income.netProfit": "-32895831.45",
+      "income.netProfitParent": "-156923683.82",
+    });
+  });
+
+  it("selects the current main statement after a historical correction table", async () => {
+    const text = await fixture("annual-main-statement-after-correction.txt");
+    expect(extractFinancialValues([text], {
+      fiscalYear: 2023,
+      presentation: "annual",
+    })).toMatchObject({
+      "income.revenue": "5151265004.81",
+      "income.netProfitParent": "-1031561794.05",
+    });
+  });
+
+  it("extracts current and restated comparative columns from one filing", async () => {
+    const text = await fixture("quarterly-comparative-600150-2026q1.txt");
+    expect(extractFinancialColumns([text], {
+      fiscalYear: 2026,
+      fiscalQuarter: 1,
+      presentation: "ytd",
+    })).toMatchObject({
+      current: {
+        "income.revenue": "43312405150.04",
+        "income.netProfitParent": "4832277995.78",
+      },
+      comparative: {
+        "income.revenue": "27962098360.55",
+        "income.netProfitParent": "1374209099.84",
+      },
+      currentEvidence: {
+        "income.revenue": {
+          pageNumber: 1,
+        },
+      },
+    });
+  });
+
+  it("emits latest-filing comparative observations for requested prior YTD periods", async () => {
+    const fetchImplementation = vi.fn<FetchImplementation>(
+      async (input, init) => {
+        const url = new URL(String(input));
+        if (url.pathname.endsWith("/information/topSearch/query")) {
+          return new Response(await fixture("search-600150.json"));
+        }
+        if (url.pathname.endsWith("/hisAnnouncement/query")) {
+          const form = new URLSearchParams(String(init?.body));
+          return new Response(
+            form.get("seDate")?.startsWith("2026-") === true
+              ? await fixture("quarterly-600150-2026q1.json")
+              : JSON.stringify({
+                  totalAnnouncement: 0,
+                  totalRecordNum: 0,
+                  announcements: [],
+                }),
+          );
+        }
+        if (url.hostname === "static.cninfo.com.cn") {
+          expect(url.pathname).toBe(
+            "/finalpage/2026-04-30/1225261166.PDF",
+          );
+          return new Response("%PDF-comparative-fixture");
+        }
+        return new Response("not found", { status: 404 });
+      },
+    );
+    const provider = new CninfoProvider({
+      fetchImplementation,
+      extractTextImplementation: async () => [
+        await fixture("quarterly-comparative-600150-2026q1.txt"),
+      ],
+      retries: 0,
+    });
+    const concepts = [
+      "income.revenue",
+      "income.netProfitParent",
+    ] as const;
+    const batch = parseProviderBatch(provider, await provider.fetch({
+      instrument: {
+        instrumentId: "XSHG:600150",
+        companyId: "company:XSHG:600150",
+        exchangeMic: "XSHG",
+        symbol: "600150",
+        shareClass: "A",
+        tradingCurrency: "CNY",
+      },
+      requirements: concepts.flatMap((conceptId) => [
+        {
+          conceptId,
+          required: false,
+          period: {
+            fiscalYear: 2025,
+            fiscalQuarter: 1 as const,
+            presentation: "ytd" as const,
+          },
+        },
+        {
+          conceptId,
+          required: false,
+          period: {
+            fiscalYear: 2026,
+            fiscalQuarter: 1 as const,
+            presentation: "ytd" as const,
+          },
+        },
+      ]),
+      asOf: "2026-07-29T23:59:59+08:00",
+      offline: false,
+    }, {
+      signal: new AbortController().signal,
+      now: "2026-07-29T10:00:00+08:00",
+      snapshots,
+    }));
+
+    expect(batch.observations).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        concept: "income.revenue",
+        value: "27962098360.55",
+        period: expect.objectContaining({
+          fiscalYear: 2025,
+          fiscalQuarter: 1,
+          presentation: "ytd",
+        }),
+        provenance: expect.objectContaining({
+          documentId: "1225261166",
+          rawField: "合并利润表.营业总收入.上年同期",
+          transformations: expect.arrayContaining([
+            expect.objectContaining({
+              transformId: "latest-filing-comparative-period",
+            }),
+          ]),
+        }),
+      }),
+      expect.objectContaining({
+        concept: "income.netProfitParent",
+        value: "1374209099.84",
+        period: expect.objectContaining({
+          fiscalYear: 2025,
+          fiscalQuarter: 1,
+          presentation: "ytd",
+        }),
+      }),
+    ]));
   });
 
   it("resolves the issuer, selects the full report, and emits official facts", async () => {

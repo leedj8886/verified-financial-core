@@ -40,12 +40,14 @@ interface DerivationRecord {
   period: ReportingPeriod;
   basis: AccountingBasis;
   instrumentScoped?: boolean;
+  publishedAt?: string;
 }
 
 function makeDerivationProvider(options: {
   providerId: string;
   capabilities: ProviderCapability[];
   records: DerivationRecord[];
+  sourceType?: "official" | "first-party" | "aggregator";
 }): {
   provider: SourceProvider;
   fetch: ReturnType<typeof vi.fn<SourceProvider["fetch"]>>;
@@ -106,13 +108,14 @@ function makeDerivationProvider(options: {
         period: record.period,
         basis: record.basis,
         availability: {
-          publishedAt: "2026-07-20T18:00:00+08:00",
+          publishedAt: record.publishedAt
+            ?? "2026-07-20T18:00:00+08:00",
           fetchedAt: context.now,
         },
         provenance: {
           providerId: options.providerId,
           upstreamSourceId: options.providerId,
-          sourceType: "aggregator",
+          sourceType: options.sourceType ?? "aggregator",
           sourceUrl,
           rawSnapshotId: snapshot.snapshotId,
           rawField: record.concept,
@@ -627,6 +630,166 @@ describe("FinancialGateway", () => {
       },
       derivation: { formulaId: "ttm.flow.v1" },
     });
+  });
+
+  it("uses the latest filing's restated comparative period for TTM", async () => {
+    const basis: AccountingBasis = {
+      standard: "CAS",
+      scope: "consolidated",
+      presentation: "reported",
+      attribution: "parent",
+      currency: "CNY",
+    };
+    const currentPeriod: ReportingPeriod = {
+      kind: "duration",
+      startDate: "2026-01-01",
+      endDate: "2026-03-31",
+      fiscalYear: 2026,
+      fiscalQuarter: 1,
+      presentation: "ytd",
+    };
+    const annualPeriod: ReportingPeriod = {
+      kind: "duration",
+      startDate: "2025-01-01",
+      endDate: "2025-12-31",
+      fiscalYear: 2025,
+      presentation: "annual",
+    };
+    const comparativePeriod: ReportingPeriod = {
+      kind: "duration",
+      startDate: "2025-01-01",
+      endDate: "2025-03-31",
+      fiscalYear: 2025,
+      fiscalQuarter: 1,
+      presentation: "ytd",
+    };
+    const commonRecords: DerivationRecord[] = [
+      {
+        concept: "income.revenue",
+        value: "43312405150.04",
+        unit: "CNY",
+        period: currentPeriod,
+        basis,
+      },
+      {
+        concept: "income.revenue",
+        value: "151977991216.09",
+        unit: "CNY",
+        period: annualPeriod,
+        basis,
+      },
+      {
+        concept: "income.netProfitParent",
+        value: "4832277995.78",
+        unit: "CNY",
+        period: currentPeriod,
+        basis,
+      },
+      {
+        concept: "income.netProfitParent",
+        value: "7848378198.33",
+        unit: "CNY",
+        period: annualPeriod,
+        basis,
+      },
+    ];
+    const official = makeDerivationProvider({
+      providerId: "cninfo",
+      capabilities: ["financials"],
+      sourceType: "official",
+      records: [
+        ...commonRecords,
+        {
+          concept: "income.revenue",
+          value: "15857983133.24",
+          unit: "CNY",
+          period: comparativePeriod,
+          basis,
+          publishedAt: "2025-04-30T23:59:59+08:00",
+        },
+        {
+          concept: "income.revenue",
+          value: "27962098360.55",
+          unit: "CNY",
+          period: comparativePeriod,
+          basis,
+          publishedAt: "2026-04-30T23:59:59+08:00",
+        },
+        {
+          concept: "income.netProfitParent",
+          value: "1126903895.50",
+          unit: "CNY",
+          period: comparativePeriod,
+          basis,
+          publishedAt: "2025-04-30T23:59:59+08:00",
+        },
+        {
+          concept: "income.netProfitParent",
+          value: "1374209099.84",
+          unit: "CNY",
+          period: comparativePeriod,
+          basis,
+          publishedAt: "2026-04-30T23:59:59+08:00",
+        },
+      ],
+    });
+    const aggregator = makeDerivationProvider({
+      providerId: "eastmoney",
+      capabilities: ["financials"],
+      records: [
+        ...commonRecords,
+        {
+          concept: "income.revenue",
+          value: "27962098360.55",
+          unit: "CNY",
+          period: comparativePeriod,
+          basis,
+          publishedAt: "2026-04-30T23:59:59+08:00",
+        },
+        {
+          concept: "income.netProfitParent",
+          value: "1374209099.84",
+          unit: "CNY",
+          period: comparativePeriod,
+          basis,
+          publishedAt: "2026-04-30T23:59:59+08:00",
+        },
+      ],
+    });
+    const { gateway } = await makeGateway([
+      official.provider,
+      aggregator.provider,
+    ]);
+    const factSet = await gateway.getFacts({
+      instrument: "600150.SH",
+      requirements: [
+        "income.revenue",
+        "income.netProfitParent",
+      ].map((conceptId) => ({
+        conceptId: conceptId as ConceptId,
+        required: true,
+        period: {
+          fiscalYear: 2026,
+          fiscalQuarter: 1 as const,
+          presentation: "ttm" as const,
+        },
+      })),
+      asOf: "2026-07-29T23:59:59+08:00",
+    });
+
+    expect(factSet.facts).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        concept: "income.revenue",
+        value: "167328298005.58",
+        usable: true,
+      }),
+      expect.objectContaining({
+        concept: "income.netProfitParent",
+        value: "11306447094.27",
+        usable: true,
+      }),
+    ]));
+    expect(factSet.summary.overallStatus).toBe("verified");
   });
 
   it("composes TTM flow derivations before deriving free cash flow", async () => {
