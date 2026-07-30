@@ -163,6 +163,8 @@ export const UnmappedObservationSchema = z.object({
   rawField: z.string().min(1),
   rawValue: z.unknown(),
   reasonCode: z.literal("UNMAPPED_SOURCE_FIELD"),
+  intendedConceptId: ConceptIdSchema.optional(),
+  intendedPeriod: ReportingPeriodSchema.optional(),
 });
 export type UnmappedObservation = z.infer<typeof UnmappedObservationSchema>;
 

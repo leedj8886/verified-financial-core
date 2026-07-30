@@ -160,12 +160,15 @@ pnpm --silent ah-context facts 600519.SH \
   --format json
 ```
 
-Historical daily closes use the latest trading day at or before `asOf`, so a
-weekend request may return the preceding Friday. Mainland daily closes are
-conservatively available from 15:30 +08:00 and Hong Kong closes from 16:30
-+08:00. Same-calendar-day requests continue to use the current quote path.
-Historical market cap is unavailable unless shares outstanding exist for the
-same point in time. The Gateway will not multiply a historical close by the
+Historical daily closes use the latest trading day at or before `asOf`. The
+Fact period remains the requested valuation date, while
+`availability.effectiveDate` records the actual trading date (for example, the
+preceding Friday for a weekend or the last close before a suspension).
+Mainland daily closes are conservatively available from 15:30 +08:00 and Hong
+Kong closes from 16:30 +08:00. Same-calendar-day requests continue to use the
+current quote path. Historical market cap is unavailable unless the official
+CNINFO point-in-time share ledger contains a share count both effective and
+disclosed by `asOf`. The Gateway will not multiply a historical close by the
 latest share count.
 
 Request the implemented cash dividend per share assigned to a fiscal year:
@@ -218,9 +221,16 @@ request or cache identity. It currently derives:
 - market cap from same-period close price and shares outstanding.
 
 Every derived fact records its formula and input Fact/Observation lineage.
-Direct usable facts always take precedence. Missing or incompatible inputs
-fail closed with `DERIVATION_UNAVAILABLE:<concept>`; ROE, EPS-based P/E, and
-other non-additive ratios are intentionally not inferred.
+All input Facts are persisted with the FactSet, and `explain` recursively
+expands the derivation tree down to source Observations and raw snapshots.
+Direct usable facts always take precedence. Missing or unusable inputs fail
+closed with both the summary `DERIVATION_UNAVAILABLE:<concept>` and an exact
+input reason such as
+`DERIVATION_INPUT_MISSING:income.revenue:2023-06-30:ytd`. Provider causes add
+the provider, concept, period, and cause, for example
+`PROVIDER_INPUT_MISSING:cninfo-direct:income.revenue:2024-06-30:ytd:REPORT_NOT_AVAILABLE_AS_OF`.
+ROE, EPS-based P/E, and other non-additive ratios are intentionally not
+inferred.
 
 For a period restated by a later filing, verification uses the latest
 publication from each upstream source while retaining all superseded

@@ -55,7 +55,15 @@ const historicalRequest: ProviderRequest = {
     shareClass: "A",
     tradingCurrency: "CNY",
   },
-  requirements: [{ conceptId: "market.price.close", required: true }],
+  requirements: [{
+    conceptId: "market.price.close",
+    required: true,
+    period: {
+      fiscalYear: 2025,
+      fiscalQuarter: 3,
+      presentation: "quarter",
+    },
+  }],
   asOf: "2025-07-27T23:59:59+08:00",
   offline: false,
 };
@@ -124,14 +132,20 @@ describe("TencentProvider", () => {
     expect(calls).toHaveLength(1);
     expect(calls[0]).toContain("/appstock/app/kline/kline?");
     expect(calls[0]).toContain(
-      "param=sh600519%2Cday%2C2024-07-22%2C2025-07-27%2C400",
+      "param=sh600519%2Cday%2C2025-01-28%2C2025-07-27%2C200",
     );
     expect(batch.observations).toEqual([
       expect.objectContaining({
         concept: "market.price.close",
         value: "1455.000",
-        period: expect.objectContaining({ endDate: "2025-07-25" }),
+        period: expect.objectContaining({
+          endDate: "2025-07-27",
+          fiscalYear: 2025,
+          fiscalQuarter: 3,
+          presentation: "quarter",
+        }),
         availability: expect.objectContaining({
+          effectiveDate: "2025-07-25",
           publishedAt: "2025-07-25T15:30:00+08:00",
         }),
         provenance: expect.objectContaining({
@@ -144,6 +158,27 @@ describe("TencentProvider", () => {
         }),
       }),
     ]);
+  });
+
+  it("keeps the history window below Tencent's effective row cap", async () => {
+    const calls: string[] = [];
+    const provider = new TencentProvider({
+      fetchImplementation: async (input) => {
+        calls.push(String(input));
+        return new Response(await fixture("history-600519-2025.json"));
+      },
+      retries: 0,
+    });
+
+    await provider.fetch(historicalRequest, {
+      signal: new AbortController().signal,
+      now: "2026-07-27T10:45:00+08:00",
+      snapshots,
+    });
+
+    expect(calls[0]).toContain(
+      "param=sh600519%2Cday%2C2025-01-28%2C2025-07-27%2C200",
+    );
   });
 
   it("does not expose a daily close before its conservative availability time", async () => {
@@ -173,11 +208,13 @@ describe("TencentProvider", () => {
 
     expect(beforeClose.observations[0]).toMatchObject({
       value: "1491.500",
-      period: { endDate: "2025-07-24" },
+      period: { endDate: "2025-07-25" },
+      availability: { effectiveDate: "2025-07-24" },
     });
     expect(atClose.observations[0]).toMatchObject({
       value: "1455.000",
       period: { endDate: "2025-07-25" },
+      availability: { effectiveDate: "2025-07-25" },
     });
   });
 
@@ -217,12 +254,16 @@ describe("TencentProvider", () => {
 
     expect(beforeClose.observations[0]).toMatchObject({
       value: "557.000",
-      period: { endDate: "2025-07-24" },
+      period: { endDate: "2025-07-25" },
+      availability: { effectiveDate: "2025-07-24" },
     });
     expect(atClose.observations[0]).toMatchObject({
       value: "550.500",
       period: { endDate: "2025-07-25" },
-      availability: { publishedAt: "2025-07-25T16:30:00+08:00" },
+      availability: {
+        effectiveDate: "2025-07-25",
+        publishedAt: "2025-07-25T16:30:00+08:00",
+      },
     });
   });
 });

@@ -60,6 +60,6 @@ describe("VerifiedFactSet JSON contract", () => {
       .update(JSON.stringify(VERIFIED_FACT_SET_JSON_SCHEMA))
       .digest("hex");
     expect(fingerprint)
-      .toBe("040efc3485caf3a6c4175adfd56bd645793a49914c45c7c7abc2ebb6b6daea4e");
+      .toBe("0a78079951bd18d2d28fe693ad0301a140db491e970c2979e535603d2d087efe");
   });
 });

@@ -28,7 +28,7 @@ import {
 
 const PROVIDER_ID = "eastmoney-direct";
 const UPSTREAM_SOURCE_ID = "eastmoney";
-const MAPPING_VERSION = "eastmoney@1.2.0";
+const MAPPING_VERSION = "eastmoney@1.4.0";
 const QUOTE_ENDPOINT = "https://push2.eastmoney.com/api/qt/stock/get";
 const HISTORY_ENDPOINT =
   "https://push2his.eastmoney.com/api/qt/stock/kline/get";
@@ -241,12 +241,18 @@ function quotePeriod(timestampSeconds: string): ReportingPeriod {
   };
 }
 
-function historicalPeriod(date: string): ReportingPeriod {
+function historicalPeriod(
+  date: string,
+  selector: ProviderRequest["requirements"][number]["period"],
+): ReportingPeriod {
   return {
     kind: "instant",
     endDate: date,
-    fiscalYear: Number(date.slice(0, 4)),
-    presentation: "annual",
+    fiscalYear: selector?.fiscalYear ?? Number(date.slice(0, 4)),
+    ...(selector?.fiscalQuarter === undefined
+      ? {}
+      : { fiscalQuarter: selector.fiscalQuarter }),
+    presentation: selector?.presentation ?? "annual",
   };
 }
 
@@ -666,6 +672,9 @@ export class EastmoneyProvider implements SourceProvider {
     );
     const historicalClose = requestedConcepts.has("market.price.close")
       && isHistoricalDate(request.asOf, context.now);
+    const historicalCloseSelector = request.requirements.find(
+      (requirement) => requirement.conceptId === "market.price.close",
+    )?.period;
     const needsCurrentQuote = [...requestedConcepts].some((concept) =>
       MARKET_CONCEPTS.has(concept)
       && !(concept === "market.price.close" && historicalClose)
@@ -806,7 +815,10 @@ export class EastmoneyProvider implements SourceProvider {
           dailyClose.date,
           request.instrument.exchangeMic,
         );
-        const period = historicalPeriod(dailyClose.date);
+        const period = historicalPeriod(
+          marketDate(String(Date.parse(request.asOf) / 1000)),
+          historicalCloseSelector,
+        );
         observations.push(ObservationSchema.parse({
           observationId: stableId("obs", {
             providerId: this.providerId,
@@ -824,6 +836,7 @@ export class EastmoneyProvider implements SourceProvider {
           period,
           basis: quoteBasis(request.instrument.tradingCurrency),
           availability: {
+            effectiveDate: dailyClose.date,
             publishedAt,
             sourceAsOf: publishedAt,
             fetchedAt: context.now,

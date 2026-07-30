@@ -65,6 +65,110 @@ const request: ProviderRequest = {
 };
 
 describe("CninfoProvider", () => {
+  it("selects point-in-time shares using both effective and disclosure dates", async () => {
+    const fetchImplementation = vi.fn<FetchImplementation>(
+      async (input) => {
+        const url = new URL(String(input));
+        if (url.pathname.endsWith("/information/topSearch/query")) {
+          return new Response(JSON.stringify([{
+            code: "601111",
+            orgId: "gssh0601111",
+            zwjc: "中国国航",
+          }]));
+        }
+        if (url.pathname.endsWith("/api/stock/p_stock2215")) {
+          return new Response(await fixture("share-changes-601111.json"));
+        }
+        return new Response("not found", { status: 404 });
+      },
+    );
+    const provider = new CninfoProvider({
+      fetchImplementation,
+      retries: 0,
+    });
+    const batch = parseProviderBatch(provider, await provider.fetch({
+      instrument: {
+        instrumentId: "XSHG:601111",
+        companyId: "company:XSHG:601111",
+        exchangeMic: "XSHG",
+        symbol: "601111",
+        shareClass: "A",
+        tradingCurrency: "CNY",
+      },
+      requirements: [{
+        conceptId: "market.shares.outstanding",
+        required: true,
+        period: {
+          fiscalYear: 2024,
+          fiscalQuarter: 3,
+          presentation: "quarter",
+        },
+      }],
+      asOf: "2024-08-30T23:59:59+08:00",
+      offline: false,
+    }, {
+      signal: new AbortController().signal,
+      now: "2026-07-30T10:00:00+08:00",
+      snapshots,
+    }));
+
+    expect(batch.observations).toEqual([
+      expect.objectContaining({
+        instrumentId: "XSHG:601111",
+        concept: "market.shares.outstanding",
+        value: "1659372.0146",
+        scale: "10000",
+        period: {
+          kind: "instant",
+          endDate: "2024-08-30",
+          fiscalYear: 2024,
+          fiscalQuarter: 3,
+          presentation: "quarter",
+        },
+        availability: expect.objectContaining({
+          effectiveDate: "2024-02-07",
+          filingDate: "2024-02-08",
+          publishedAt: "2024-02-08T23:59:59+08:00",
+        }),
+        provenance: expect.objectContaining({
+          rawField: "records[].F003N",
+          extractionMethod: "api",
+        }),
+      }),
+    ]);
+    expect(batch.issues).toEqual([]);
+
+    const defaultPeriodBatch = parseProviderBatch(
+      provider,
+      await provider.fetch({
+        ...request,
+        instrument: {
+          instrumentId: "XSHG:601111",
+          companyId: "company:XSHG:601111",
+          exchangeMic: "XSHG",
+          symbol: "601111",
+          shareClass: "A",
+          tradingCurrency: "CNY",
+        },
+        requirements: [{
+          conceptId: "market.shares.outstanding",
+          required: true,
+        }],
+        asOf: "2024-08-30T23:59:59+08:00",
+      }, {
+        signal: new AbortController().signal,
+        now: "2026-07-30T10:00:00+08:00",
+        snapshots,
+      }),
+    );
+    expect(defaultPeriodBatch.observations[0]?.period).toEqual({
+      kind: "instant",
+      endDate: "2024-08-30",
+      fiscalYear: 2024,
+      presentation: "annual",
+    });
+  });
+
   it("extracts current consolidated values without crossing statement boundaries", async () => {
     const text = await fixture("annual-600519-2025.txt");
     expect(extractFinancialValues([text])).toMatchObject({
@@ -102,6 +206,23 @@ describe("CninfoProvider", () => {
     })).toMatchObject({
       "income.revenue": "5151265004.81",
       "income.netProfitParent": "-1031561794.05",
+    });
+  });
+
+  it("supports airline statement labels, integer values, losses, and thousand-CNY scale", async () => {
+    const extraction = extractFinancialColumns([
+      await fixture("airline-statement-labels.txt"),
+    ], {
+      fiscalYear: 2023,
+      fiscalQuarter: 2,
+      presentation: "ytd",
+    });
+    expect(extraction.current).toMatchObject({
+      "income.revenue": "59613193",
+      "income.netProfitParent": "-3450728",
+    });
+    expect(extraction.currentEvidence["income.revenue"]).toMatchObject({
+      scale: "1000",
     });
   });
 
@@ -392,7 +513,16 @@ describe("CninfoProvider", () => {
       snapshots,
     });
     expect(batch.observations).toEqual([]);
-    expect(batch.issues[0]?.code).toBe("EMPTY_RESPONSE");
+    expect(batch.issues[0]).toMatchObject({
+      code: "EMPTY_RESPONSE",
+      reasonCode: "REPORT_NOT_AVAILABLE_AS_OF",
+      requirements: expect.arrayContaining([
+        expect.objectContaining({
+          conceptId: "income.revenue",
+          period: { fiscalYear: 2025, presentation: "annual" },
+        }),
+      ]),
+    });
     expect(fetchImplementation).toHaveBeenCalledTimes(2);
   });
 

@@ -163,6 +163,11 @@ describe("EastmoneyProvider", () => {
       requirements: [{
         conceptId: "market.price.close",
         required: true,
+        period: {
+          fiscalYear: 2025,
+          fiscalQuarter: 3,
+          presentation: "quarter",
+        },
       }],
       asOf: "2025-07-27T23:59:59+08:00",
       offline: false,
@@ -183,9 +188,13 @@ describe("EastmoneyProvider", () => {
         concept: "market.price.close",
         value: "1455.00",
         period: expect.objectContaining({
-          endDate: "2025-07-25",
+          endDate: "2025-07-27",
+          fiscalYear: 2025,
+          fiscalQuarter: 3,
+          presentation: "quarter",
         }),
         availability: expect.objectContaining({
+          effectiveDate: "2025-07-25",
           publishedAt: "2025-07-25T15:30:00+08:00",
         }),
         provenance: expect.objectContaining({
@@ -232,7 +241,10 @@ describe("EastmoneyProvider", () => {
       now: "2026-07-28T10:00:00+08:00",
       snapshots,
     });
-    expect(beforeClose.observations[0]?.period.endDate).toBe("2025-07-24");
+    expect(beforeClose.observations[0]).toMatchObject({
+      period: { endDate: "2025-07-25" },
+      availability: { effectiveDate: "2025-07-24" },
+    });
     const atClose = await provider.fetch({
       ...baseRequest,
       asOf: "2025-07-25T15:30:00+08:00",
@@ -241,7 +253,10 @@ describe("EastmoneyProvider", () => {
       now: "2026-07-28T10:00:00+08:00",
       snapshots,
     });
-    expect(atClose.observations[0]?.period.endDate).toBe("2025-07-25");
+    expect(atClose.observations[0]).toMatchObject({
+      period: { endDate: "2025-07-25" },
+      availability: { effectiveDate: "2025-07-25" },
+    });
   });
 
   it("aggregates implemented A-share cash distributions by fiscal year", async () => {

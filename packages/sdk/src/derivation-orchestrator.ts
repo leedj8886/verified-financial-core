@@ -26,6 +26,7 @@ const TTM_FLOW_CONCEPTS = new Set<ConceptId>([
 
 interface MaterializedFacts {
   facts: CanonicalFact[];
+  lineageFacts: CanonicalFact[];
   reasonCodes: string[];
 }
 
@@ -315,6 +316,44 @@ function supportsAutomaticDerivation(requirement: FactRequirement): boolean {
     && TTM_FLOW_CONCEPTS.has(requirement.conceptId);
 }
 
+function selectorEndDate(period: FactPeriodSelector): string {
+  const monthDay = period.presentation === "annual"
+    ? "12-31"
+    : {
+        1: "03-31",
+        2: "06-30",
+        3: "09-30",
+        4: "12-31",
+      }[period.fiscalQuarter ?? 4];
+  return `${period.fiscalYear}-${monthDay}`;
+}
+
+function missingDerivationInputReasons(
+  facts: readonly CanonicalFact[],
+  requirement: FactRequirement,
+): string[] {
+  if (
+    requirement.period?.presentation !== "ttm"
+    || requirement.period.fiscalQuarter === undefined
+    || !TTM_FLOW_CONCEPTS.has(requirement.conceptId)
+  ) {
+    return [];
+  }
+  return dependencyRequirements(requirement).flatMap((dependency) => {
+    const period = dependency.period;
+    if (period === undefined) return [];
+    const direct = facts.filter((fact) =>
+      matchesRequirement(fact, dependency)
+    );
+    if (direct.some((fact) => fact.usable)) return [];
+    const state = direct.length === 0 ? "MISSING" : "UNUSABLE";
+    return [
+      `DERIVATION_INPUT_${state}:${dependency.conceptId}:`
+      + `${selectorEndDate(period)}:${period.presentation}`,
+    ];
+  });
+}
+
 export function materializeRequestedFacts(
   baseFacts: readonly CanonicalFact[],
   originalRequirements: readonly FactRequirement[],
@@ -357,11 +396,19 @@ export function materializeRequestedFacts(
     for (const fact of direct) selected.set(fact.factId, fact);
     if (supportsAutomaticDerivation(requirement)) {
       reasonCodes.push(`DERIVATION_UNAVAILABLE:${requirement.conceptId}`);
+      reasonCodes.push(
+        ...missingDerivationInputReasons(available, requirement),
+      );
     }
   }
 
   return {
     facts: sortedFacts([...selected.values()]),
+    lineageFacts: sortedFacts([
+      ...new Map(
+        available.map((fact) => [fact.factId, fact]),
+      ).values(),
+    ]),
     reasonCodes: [...new Set(reasonCodes)].sort(),
   };
 }

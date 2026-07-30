@@ -43,6 +43,7 @@ function makeGateway(
       verification: {} as never,
       observations: [],
       rawSnapshotIds: [],
+      inputs: [],
     })),
     doctor: vi.fn(() => ({
       schemaVersion: VERIFIED_FACT_SET_SCHEMA_VERSION,

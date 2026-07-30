@@ -52,6 +52,8 @@ export const ProviderIssueSchema = z.object({
   code: ProviderErrorCodeSchema,
   message: z.string().min(1),
   retryable: z.boolean(),
+  reasonCode: z.string().min(1).optional(),
+  requirements: z.array(FactRequirementSchema).optional(),
 });
 export type ProviderIssue = z.infer<typeof ProviderIssueSchema>;
 

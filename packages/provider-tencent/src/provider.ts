@@ -19,7 +19,7 @@ import {
 
 const PROVIDER_ID = "tencent-direct";
 const UPSTREAM_SOURCE_ID = "tencent";
-const MAPPING_VERSION = "tencent@1.1.0";
+const MAPPING_VERSION = "tencent@1.4.0";
 const QUOTE_ENDPOINT = "https://qt.gtimg.cn/q=";
 const HISTORY_ENDPOINT =
   "https://web.ifzq.gtimg.cn/appstock/app/kline/kline";
@@ -130,12 +130,18 @@ function quotePeriod(date: string, concept: ConceptId): ReportingPeriod {
   };
 }
 
-function historicalPeriod(date: string): ReportingPeriod {
+function historicalPeriod(
+  date: string,
+  selector: ProviderRequest["requirements"][number]["period"],
+): ReportingPeriod {
   return {
     kind: "instant",
     endDate: date,
-    fiscalYear: Number(date.slice(0, 4)),
-    presentation: "annual",
+    fiscalYear: selector?.fiscalYear ?? Number(date.slice(0, 4)),
+    ...(selector?.fiscalQuarter === undefined
+      ? {}
+      : { fiscalQuarter: selector.fiscalQuarter }),
+    presentation: selector?.presentation ?? "annual",
   };
 }
 
@@ -232,7 +238,7 @@ export class TencentProvider implements SourceProvider {
     const url = new URL(this.options.historyEndpoint ?? HISTORY_ENDPOINT);
     url.searchParams.set(
       "param",
-      `${symbol},day,${shiftDate(endDate, -370)},${endDate},400`,
+      `${symbol},day,${shiftDate(endDate, -180)},${endDate},200`,
     );
     return url.toString();
   }
@@ -259,6 +265,9 @@ export class TencentProvider implements SourceProvider {
       );
       const historicalClose = requestedConcepts.has("market.price.close")
         && isHistoricalDate(request.asOf, context.now);
+      const historicalCloseSelector = request.requirements.find(
+        (requirement) => requirement.conceptId === "market.price.close",
+      )?.period;
       const needsCurrentQuote = [...requestedConcepts].some((concept) =>
         fieldByConcept.has(concept)
         && !(concept === "market.price.close" && historicalClose)
@@ -429,7 +438,10 @@ export class TencentProvider implements SourceProvider {
             dailyClose.date,
             request.instrument.exchangeMic,
           );
-          const period = historicalPeriod(dailyClose.date);
+          const period = historicalPeriod(
+            calendarDate(request.asOf),
+            historicalCloseSelector,
+          );
           observations.push(ObservationSchema.parse({
             observationId: stableId({
               snapshotId: snapshot.snapshotId,
@@ -452,6 +464,7 @@ export class TencentProvider implements SourceProvider {
               currency: request.instrument.tradingCurrency,
             },
             availability: {
+              effectiveDate: dailyClose.date,
               publishedAt,
               sourceAsOf: publishedAt,
               fetchedAt: context.now,

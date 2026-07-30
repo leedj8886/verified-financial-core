@@ -18,6 +18,7 @@ import {
   VERIFIED_FACT_SET_SCHEMA_VERSION,
   isAvailableAsOf,
   type Company,
+  type CanonicalFact,
   type FactRequirement,
   type FactRequest,
   type Instrument,
@@ -41,7 +42,7 @@ import {
   materializeRequestedFacts,
 } from "./derivation-orchestrator.js";
 
-const DEFAULT_VALIDATION_RULES_VERSION = "1.7.0";
+const DEFAULT_VALIDATION_RULES_VERSION = "1.8.0";
 
 export class GatewayError extends Error {
   readonly code: "NOT_FOUND" | "INVALID_INPUT" | "STORAGE_ERROR";
@@ -71,6 +72,7 @@ export interface FinancialGatewayOptions {
 interface ProviderOutcome {
   batch?: ProviderBatch;
   issues: ProviderIssue[];
+  requirements: FactRequirement[];
 }
 
 interface NormalizedFreshness {
@@ -81,12 +83,87 @@ interface NormalizedFreshness {
 
 interface AssembledFactSet {
   factSet: VerifiedFactSet;
+  lineageFacts: CanonicalFact[];
   observations: Observation[];
   mappingVersions: string[];
 }
 
 function providerReason(issue: ProviderIssue): string {
   return `PROVIDER_FAILURE:${issue.providerId}:${issue.code}`;
+}
+
+function selectorEndDate(
+  period: NonNullable<FactRequirement["period"]>,
+): string {
+  const monthDay = period.presentation === "annual"
+    ? "12-31"
+    : {
+        1: "03-31",
+        2: "06-30",
+        3: "09-30",
+        4: "12-31",
+      }[period.fiscalQuarter ?? 4];
+  return `${period.fiscalYear}-${monthDay}`;
+}
+
+function sameRequirement(
+  left: FactRequirement,
+  right: FactRequirement,
+): boolean {
+  return canonicalJson(left) === canonicalJson(right);
+}
+
+function providerInputReasons(
+  outcomes: readonly ProviderOutcome[],
+  materializedReasonCodes: readonly string[],
+): string[] {
+  const missing = new Set(
+    materializedReasonCodes.filter((reasonCode) =>
+      reasonCode.startsWith("DERIVATION_INPUT_MISSING:")
+    ),
+  );
+  return outcomes.flatMap((outcome) =>
+    outcome.requirements.flatMap((requirement) => {
+      const period = requirement.period;
+      if (period === undefined) return [];
+      const dependencyCode =
+        `DERIVATION_INPUT_MISSING:${requirement.conceptId}:`
+        + `${selectorEndDate(period)}:${period.presentation}`;
+      if (!missing.has(dependencyCode)) return [];
+      const issue = outcome.issues.find((candidate) =>
+        candidate.requirements?.some((issueRequirement) =>
+          sameRequirement(issueRequirement, requirement)
+        ) === true
+      );
+      const providerId = outcome.batch?.providerId
+        ?? issue?.providerId;
+      if (providerId === undefined) return [];
+      return [
+        `PROVIDER_INPUT_MISSING:${providerId}:${requirement.conceptId}:`
+        + `${selectorEndDate(period)}:${period.presentation}:`
+        + `${issue?.reasonCode ?? issue?.code ?? "EMPTY_RESPONSE"}`,
+      ];
+    })
+  );
+}
+
+function unmappedInputReasons(batches: readonly ProviderBatch[]): string[] {
+  return batches.flatMap((batch) =>
+    batch.unmapped.flatMap((unmapped) => {
+      if (
+        unmapped.intendedConceptId === undefined
+        || unmapped.intendedPeriod === undefined
+      ) {
+        return [];
+      }
+      return [
+        `PROVIDER_INPUT_UNMAPPED:${batch.providerId}:`
+        + `${unmapped.intendedConceptId}:`
+        + `${unmapped.intendedPeriod.endDate}:`
+        + `${unmapped.intendedPeriod.presentation}`,
+      ];
+    })
+  );
 }
 
 function unavailableReason(observation: Observation): string {
@@ -351,7 +428,11 @@ export class FinancialGateway {
         issues,
         this.now(),
       );
-      return { batch, issues };
+      return {
+        batch,
+        issues,
+        requirements: [...request.requirements],
+      };
     } catch (error) {
       const issue = normalizeThrownIssue(
         provider,
@@ -364,7 +445,10 @@ export class FinancialGateway {
         [issue],
         this.now(),
       );
-      return { issues: [issue] };
+      return {
+        issues: [issue],
+        requirements: [...request.requirements],
+      };
     } finally {
       if (timeout !== undefined) clearTimeout(timeout);
     }
@@ -435,6 +519,8 @@ export class FinancialGateway {
       : ["PROVIDER_COMPANY_IDENTITY_CONFLICT"];
     const reasonCodes = [
       ...issues.map(providerReason),
+      ...providerInputReasons(outcomes, materialized.reasonCodes),
+      ...unmappedInputReasons(sameCompanyBatches),
       ...unavailableReasons,
       ...instrumentScopeReasons,
       ...companyConflictReasons,
@@ -446,6 +532,9 @@ export class FinancialGateway {
     );
     const observations = eligibleObservations.filter(
       (observation) => observation.companyId === company.companyId,
+    );
+    const lineageFacts = materialized.lineageFacts.filter((fact) =>
+      fact.companyId === company.companyId
     );
     return {
       factSet: buildFactSet({
@@ -470,6 +559,7 @@ export class FinancialGateway {
         validationRulesVersion: this.validationRulesVersion,
         reasonCodes,
       }),
+      lineageFacts,
       observations,
       mappingVersions,
     };
@@ -485,6 +575,7 @@ export class FinancialGateway {
         assembled.observations,
         assembled.mappingVersions,
         cacheKey,
+        assembled.lineageFacts,
       );
     } catch (error) {
       throw new GatewayError(
@@ -531,6 +622,7 @@ export class FinancialGateway {
     });
     this.persistFactSet({
       factSet,
+      lineageFacts: cached.lineageFacts,
       observations: cached.observations,
       mappingVersions: cached.mappingVersions,
     });

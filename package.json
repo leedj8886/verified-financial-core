@@ -13,9 +13,11 @@
     "test:live": "pnpm build && vitest run --config vitest.live.config.ts",
     "test:coverage": "pnpm build && vitest run --coverage",
     "test:watch": "pnpm build && vitest",
-    "typecheck": "pnpm build && pnpm -r typecheck:local",
-    "check": "pnpm build && pnpm -r typecheck:local && vitest run",
-    "ah-context": "node apps/ah-gateway-cli/dist/bin.js"
+    "typecheck": "pnpm build && pnpm -r typecheck:local && pnpm typecheck:scripts",
+    "typecheck:scripts": "tsc -p scripts/tsconfig.json --noEmit",
+    "check": "pnpm build && pnpm -r typecheck:local && pnpm typecheck:scripts && vitest run",
+    "ah-context": "node apps/ah-gateway-cli/dist/bin.js",
+    "audit:industry": "node scripts/audit-industry-coverage.ts"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

@@ -15,11 +15,13 @@ describe("reporting period and availability", () => {
       presentation: "annual",
     });
     const availability = AvailabilitySchema.parse({
+      effectiveDate: "2025-12-31",
       filingDate: "2026-03-20",
       publishedAt: "2026-03-20T18:00:00+08:00",
       fetchedAt: "2026-07-26T10:00:00+08:00",
     });
     expect(period.endDate).toBe("2025-12-31");
+    expect(availability.effectiveDate).toBe("2025-12-31");
     expect(isAvailableAsOf(
       availability,
       "2026-03-19T23:59:59+08:00",

@@ -58,6 +58,7 @@ export const ReportingPeriodSchema = z.object({
 export type ReportingPeriod = z.infer<typeof ReportingPeriodSchema>;
 
 export const AvailabilitySchema = z.object({
+  effectiveDate: IsoDateSchema.optional(),
   filingDate: IsoDateSchema.optional(),
   publishedAt: IsoDateTimeSchema.optional(),
   sourceAsOf: IsoDateTimeSchema.optional(),

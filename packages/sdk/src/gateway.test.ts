@@ -869,9 +869,82 @@ describe("FinancialGateway", () => {
         formulaId: "fcf.ocf-minus-capex.v1",
       },
     });
-    expect(
-      (await gateway.explainFact(factSet.facts[0]!.factId)).observations,
-    ).toHaveLength(6);
+    const explanation = await gateway.explainFact(factSet.facts[0]!.factId);
+    expect(explanation.observations).toHaveLength(6);
+    expect(explanation.inputs).toHaveLength(2);
+    for (const ttmInput of explanation.inputs) {
+      expect(ttmInput.inputs).toHaveLength(3);
+      for (const input of ttmInput.inputs) {
+        expect(await gateway.explainFact(input.fact.factId)).toMatchObject({
+          fact: { factId: input.fact.factId },
+        });
+      }
+    }
+  });
+
+  it("reports the exact missing TTM input period", async () => {
+    const basis: AccountingBasis = {
+      standard: "CAS",
+      scope: "consolidated",
+      presentation: "reported",
+      attribution: "parent",
+      currency: "CNY",
+    };
+    const fixture = makeDerivationProvider({
+      providerId: "ttm-one-period-missing",
+      capabilities: ["financials"],
+      records: [
+        {
+          concept: "income.revenue",
+          value: "80",
+          unit: "CNY",
+          period: {
+            kind: "duration",
+            startDate: "2024-01-01",
+            endDate: "2024-06-30",
+            fiscalYear: 2024,
+            fiscalQuarter: 2,
+            presentation: "ytd",
+          },
+          basis,
+        },
+        {
+          concept: "income.revenue",
+          value: "100",
+          unit: "CNY",
+          period: {
+            kind: "duration",
+            startDate: "2023-01-01",
+            endDate: "2023-12-31",
+            fiscalYear: 2023,
+            presentation: "annual",
+          },
+          basis,
+        },
+      ],
+    });
+    const { gateway } = await makeGateway([fixture.provider]);
+    const factSet = await gateway.getFacts({
+      instrument: "600519.SH",
+      requirements: [{
+        conceptId: "income.revenue",
+        required: true,
+        period: {
+          fiscalYear: 2024,
+          fiscalQuarter: 2,
+          presentation: "ttm",
+        },
+      }],
+      asOf: "2024-08-30T23:59:59+08:00",
+    });
+
+    expect(factSet.reasonCodes).toContain(
+      "DERIVATION_INPUT_MISSING:income.revenue:2023-06-30:ytd",
+    );
+    expect(factSet.reasonCodes).toContain(
+      "PROVIDER_INPUT_MISSING:ttm-one-period-missing:"
+      + "income.revenue:2023-06-30:ytd:EMPTY_RESPONSE",
+    );
   });
 
   it("derives market cap from price and shares and caches the result", async () => {

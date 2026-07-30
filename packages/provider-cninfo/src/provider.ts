@@ -26,7 +26,7 @@ import { extractText, getDocumentProxy } from "unpdf";
 
 const PROVIDER_ID = "cninfo-direct";
 const UPSTREAM_SOURCE_ID = "cninfo";
-const MAPPING_VERSION = "cninfo@1.2.0";
+const MAPPING_VERSION = "cninfo@1.3.0";
 const API_BASE = "https://www.cninfo.com.cn/new/";
 const WEBAPI_BASE = "https://webapi.cninfo.com.cn/";
 const PDF_BASE = "https://static.cninfo.com.cn/";
@@ -67,6 +67,13 @@ interface AnnualDividend {
   value: string;
   availableDate: string;
   identities: string[];
+}
+
+interface ShareChange {
+  disclosureDate: string;
+  effectiveDate: string;
+  reason?: string;
+  totalShares: string;
 }
 
 type StatementKind = "balance" | "income" | "cashFlow";
@@ -111,6 +118,7 @@ export interface FinancialExtractionPeriod {
 export interface FinancialExtractionEvidence {
   pageNumber: number;
   rawSnippet: string;
+  scale: string;
 }
 
 export interface FinancialColumnExtraction {
@@ -130,6 +138,8 @@ const fieldDefinitions: readonly FieldDefinition[] = [
     labels: [
       /一、?营业总收入/,
       /营业总收入/,
+      /一、?营业收入/,
+      /营业收入/,
     ],
   },
   {
@@ -155,8 +165,8 @@ const fieldDefinitions: readonly FieldDefinition[] = [
     statement: "income",
     rawField: "合并利润表.归属于母公司股东的净利润",
     labels: [
-      /归属于母公司(?:股东|所有者)的净利润/,
-      /归属于上市公司股东的净利润/,
+      /归属于母公司(?:股东|所有者)的净(?:利润|亏损)/,
+      /归属于上市公司股东的(?:净)?(?:利润|亏损)/,
     ],
     attribution: "parent",
   },
@@ -205,6 +215,18 @@ const fieldDefinitions: readonly FieldDefinition[] = [
 ] as const;
 
 export const CNINFO_FIELD_MAPPINGS: readonly SourceFieldMapping[] = [
+  {
+    upstreamSchema: "p_stock2215",
+    rawField: "records[].F003N",
+    conceptId: "market.shares.outstanding",
+    unit: "shares",
+    scale: "10000",
+    transformIds: [
+      "point-in-time-share-ledger",
+      "ten-thousand-shares",
+      "announcement-date-end-of-day",
+    ],
+  },
   {
     upstreamSchema: "p_sysapi1139",
     rawField: "records[].F012N",
@@ -494,6 +516,73 @@ function acceptEnckey(now: string): string {
   ]).toString("base64");
 }
 
+function parseShareChanges(value: unknown): ShareChange[] {
+  const object = asObject(value, "CNINFO share-change response is invalid");
+  if (Number(object["resultcode"]) !== 200) {
+    throw new Error(
+      asString(object["resultmsg"]) ?? "CNINFO share-change request failed",
+    );
+  }
+  const records = object["records"];
+  if (!Array.isArray(records)) {
+    throw new Error("CNINFO share-change records are invalid");
+  }
+  return records.flatMap((item): ShareChange[] => {
+    const record = asObject(item, "CNINFO share-change record is invalid");
+    const disclosureDate = isoDate(record["DECLAREDATE"]);
+    const effectiveDate = isoDate(record["VARYDATE"]);
+    const totalShares = exactDecimal(record["F003N"]);
+    const reason = asString(record["F002V"]);
+    if (
+      disclosureDate === undefined
+      || effectiveDate === undefined
+      || totalShares === undefined
+      || new Decimal(totalShares).lte(0)
+    ) {
+      return [];
+    }
+    return [{
+      disclosureDate,
+      effectiveDate,
+      totalShares,
+      ...(reason === undefined ? {} : { reason }),
+    }];
+  });
+}
+
+function selectPointInTimeShares(
+  changes: readonly ShareChange[],
+  asOf: string,
+): ShareChange | undefined {
+  const targetDate = chinaDate(asOf);
+  return changes
+    .filter((change) =>
+      change.effectiveDate <= targetDate
+      && change.disclosureDate <= targetDate
+    )
+    .sort((left, right) =>
+      right.effectiveDate.localeCompare(left.effectiveDate)
+      || right.disclosureDate.localeCompare(left.disclosureDate)
+    )[0];
+}
+
+function marketInstantPeriod(
+  requirement: FactRequirement,
+  asOf: string,
+): ReportingPeriod {
+  const endDate = chinaDate(asOf);
+  const selector = requirement.period;
+  return {
+    kind: "instant",
+    endDate,
+    fiscalYear: selector?.fiscalYear ?? Number(endDate.slice(0, 4)),
+    ...(selector?.fiscalQuarter === undefined
+      ? {}
+      : { fiscalQuarter: selector.fiscalQuarter }),
+    presentation: selector?.presentation ?? "annual",
+  };
+}
+
 function reportQuery(
   requirement: FactRequirement,
 ): Omit<FilingQuery, "requirements"> | undefined {
@@ -579,11 +668,12 @@ interface StatementCandidate {
 }
 
 const DECIMAL_TOKEN =
-  /(?:\(\s*\+?\s*\d(?:[\d,\s]*\d)?\s*\.\s*\d+\s*\)|[+-]\s*\d(?:[\d,\s]*\d)?\s*\.\s*\d+|\d[\d,]*\s*\.\s*\d+)/g;
+  /(?:\(\s*\+?\s*\d(?:[\d,\s]*\d)?(?:\s*\.\s*\d+)?\s*\)|[+-]\s*\d(?:[\d,\s]*\d)?(?:\s*\.\s*\d+)?|\d[\d,]*\s*\.\s*\d+|\d{1,3}(?:,\d{3})+)/g;
 
 function exactHeadingPattern(heading: string): RegExp {
   return new RegExp(
-    `^\\s*(?:[一二三四五六七八九十\\d]+[、.．]\\s*)?${heading}\\s*$`,
+    `^\\s*(?:[一二三四五六七八九十\\d]+[、.．]\\s*)?`
+    + `${heading}(?:\\s*[（(][^\\n]*[）)])?\\s*$`,
     "m",
   );
 }
@@ -650,6 +740,17 @@ function parseDecimalToken(raw: string): string {
     : unsigned;
 }
 
+function statementScale(text: string): string {
+  const unit = /(?:金额)?单位[:：]\s*(?:人民币)?\s*(百万元|万元|千元|元)/
+    .exec(text.slice(0, 800))?.[1];
+  return {
+    元: "1",
+    千元: "1000",
+    万元: "10000",
+    百万元: "1000000",
+  }[unit ?? "元"] ?? "1";
+}
+
 function extractRow(
   section: StatementCandidate,
   field: FieldDefinition,
@@ -677,11 +778,13 @@ function extractRow(
       .reverse()
       .find((item) => item.offset <= match.index)?.pageNumber
       ?? section.pageNumber;
+    const scale = statementScale(section.text);
     return {
       current: parseDecimalToken(current[0]),
       currentEvidence: {
         pageNumber,
         rawSnippet,
+        scale,
       },
       ...(tokens[1] === undefined
         ? {}
@@ -690,6 +793,7 @@ function extractRow(
             comparativeEvidence: {
               pageNumber,
               rawSnippet,
+              scale,
             },
           }),
     };
@@ -828,8 +932,18 @@ function isFullReport(
   query: FilingQuery,
   asOf: string,
 ): boolean {
+  const matchesReportLabel = query.presentation === "annual"
+    ? (
+        announcement.announcementTitle.includes(
+          `${query.fiscalYear}年度报告`,
+        )
+        || announcement.announcementTitle.includes(
+          `${query.fiscalYear}年年度报告`,
+        )
+      )
+    : announcement.announcementTitle.includes(query.reportLabel);
   return announcement.adjunctType.toUpperCase() === "PDF"
-    && announcement.announcementTitle.includes(query.reportLabel)
+    && matchesReportLabel
     && !/摘要|英文|取消|更正公告|提示性公告/.test(
       announcement.announcementTitle,
     )
@@ -848,7 +962,12 @@ async function defaultExtractText(
 export class CninfoProvider implements SourceProvider {
   readonly providerId = PROVIDER_ID;
   readonly upstreamSourceId = UPSTREAM_SOURCE_ID;
-  readonly capabilities = ["financials", "filings", "dividends"] as const;
+  readonly capabilities = [
+    "financials",
+    "filings",
+    "dividends",
+    "market",
+  ] as const;
   private readonly options: CninfoProviderOptions;
 
   constructor(options: CninfoProviderOptions = {}) {
@@ -998,6 +1117,58 @@ export class CninfoProvider implements SourceProvider {
     }
   }
 
+  private async requestShareChanges(
+    request: ProviderRequest,
+    context: ProviderContext,
+  ): Promise<{ parsed: unknown; snapshot: StoredSnapshotRef; sourceUrl: string }> {
+    const sourceUrl = this.webapiUrl(
+      "api/stock/p_stock2215"
+      + `?scode=${encodeURIComponent(request.instrument.symbol)}`
+      + `&sdate=1990-01-01&edate=${chinaDate(request.asOf)}`,
+    );
+    const bytes = await fetchBytes(sourceUrl, {
+      providerId: this.providerId,
+      signal: context.signal,
+      ...(this.options.fetchImplementation === undefined
+        ? {}
+        : { fetchImplementation: this.options.fetchImplementation }),
+      headers: {
+        Accept: "application/json, text/plain, */*",
+        "Accept-Enckey": acceptEnckey(context.now),
+        Origin: new URL(sourceUrl).origin,
+        Referer: new URL("/", sourceUrl).toString(),
+        "User-Agent": USER_AGENT,
+        "X-Requested-With": "XMLHttpRequest",
+      },
+      method: "POST",
+      retries: this.options.retries ?? 2,
+      timeoutMs: this.options.timeoutMs ?? 10_000,
+    });
+    const snapshot = await context.snapshots.put({
+      providerId: this.providerId,
+      sourceUrl,
+      mediaType: "json",
+      fetchedAt: context.now,
+      body: bytes,
+    });
+    try {
+      return {
+        parsed: JSON.parse(new TextDecoder().decode(bytes)),
+        snapshot,
+        sourceUrl,
+      };
+    } catch (error) {
+      throw new ProviderFailure({
+        providerId: this.providerId,
+        code: "UPSTREAM_SCHEMA_CHANGED",
+        message: error instanceof Error
+          ? `CNINFO returned invalid share-change JSON: ${error.message}`
+          : "CNINFO returned invalid share-change JSON",
+        retryable: false,
+      });
+    }
+  }
+
   private async findAnnouncement(
     request: ProviderRequest,
     orgId: string,
@@ -1142,7 +1313,21 @@ export class CninfoProvider implements SourceProvider {
     const requestsDividends = request.requirements.some((requirement) =>
       requirement.conceptId === "distribution.dividendPerShare"
     );
-    if (queries.length === 0 && !requestsDividends) {
+    const shareRequirements = [...new Map(
+      request.requirements
+        .filter((requirement) =>
+          requirement.conceptId === "market.shares.outstanding"
+        )
+        .map((requirement) => [
+          JSON.stringify(requirement.period ?? null),
+          requirement,
+        ]),
+    ).values()];
+    if (
+      queries.length === 0
+      && !requestsDividends
+      && shareRequirements.length === 0
+    ) {
       issues.push({
         providerId: this.providerId,
         code: "EMPTY_RESPONSE",
@@ -1169,6 +1354,107 @@ export class CninfoProvider implements SourceProvider {
             retryable: false,
           });
       return buildBatch();
+    }
+
+    if (shareRequirements.length > 0) {
+      try {
+        const response = await this.requestShareChanges(request, context);
+        rawSnapshots.push(response.snapshot);
+        const shares = selectPointInTimeShares(
+          parseShareChanges(response.parsed),
+          request.asOf,
+        );
+        if (shares === undefined) {
+          throw new ProviderFailure({
+            providerId: this.providerId,
+            code: "EMPTY_RESPONSE",
+            message:
+              `CNINFO has no disclosed effective share count as of ${request.asOf}`,
+            retryable: false,
+          });
+        }
+        for (const requirement of shareRequirements) {
+          const period = marketInstantPeriod(requirement, request.asOf);
+          const publishedAt = `${shares.disclosureDate}T23:59:59+08:00`;
+          observations.push(ObservationSchema.parse({
+            observationId: stableId("obs", {
+              providerId: this.providerId,
+              snapshotId: response.snapshot.snapshotId,
+              rawField: "records[].F003N",
+              concept: "market.shares.outstanding",
+              period,
+              effectiveDate: shares.effectiveDate,
+              disclosureDate: shares.disclosureDate,
+            }),
+            companyId: request.instrument.companyId,
+            instrumentId: request.instrument.instrumentId,
+            concept: "market.shares.outstanding",
+            value: shares.totalShares,
+            unit: "shares",
+            scale: "10000",
+            period,
+            basis: {
+              standard: "OTHER",
+              scope: "standalone",
+              presentation: "reported",
+              attribution: "all-shareholders",
+              currency: request.instrument.tradingCurrency,
+            },
+            availability: {
+              effectiveDate: shares.effectiveDate,
+              filingDate: shares.disclosureDate,
+              publishedAt,
+              sourceAsOf: publishedAt,
+              fetchedAt: context.now,
+            },
+            provenance: {
+              providerId: this.providerId,
+              upstreamSourceId: this.upstreamSourceId,
+              sourceType: "official",
+              sourceUrl: response.sourceUrl,
+              rawSnapshotId: response.snapshot.snapshotId,
+              rawField: "records[].F003N",
+              extractionMethod: "api",
+              fetchedAt: context.now,
+              transformations: [
+                {
+                  transformId: "point-in-time-share-ledger",
+                  version: "1.0.0",
+                  detail: [
+                    `Select latest record effective by ${chinaDate(request.asOf)}`,
+                    `and disclosed by ${chinaDate(request.asOf)}`,
+                    shares.reason === undefined
+                      ? undefined
+                      : `change reason: ${shares.reason}`,
+                  ].filter((item) => item !== undefined).join("; "),
+                },
+                {
+                  transformId: "ten-thousand-shares",
+                  version: "1.0.0",
+                  detail: "CNINFO F003N is reported in ten thousand shares",
+                },
+                {
+                  transformId: "announcement-date-end-of-day",
+                  version: "1.0.0",
+                  detail:
+                    "Treat a date-only CNINFO disclosure date as available at end of day",
+                },
+              ],
+            },
+          }));
+        }
+      } catch (error) {
+        issues.push(error instanceof ProviderFailure
+          ? error.issue
+          : {
+              providerId: this.providerId,
+              code: "PARSE_FAILED",
+              message: error instanceof Error
+                ? error.message
+                : "Failed to parse CNINFO share changes",
+              retryable: false,
+            });
+      }
     }
 
     if (requestsDividends) {
@@ -1284,6 +1570,8 @@ export class CninfoProvider implements SourceProvider {
             code: "EMPTY_RESPONSE",
             message: `CNINFO has no ${query.reportLabel} available as of ${request.asOf}`,
             retryable: false,
+            reasonCode: "REPORT_NOT_AVAILABLE_AS_OF",
+            requirements: query.requirements,
           });
           continue;
         }
@@ -1332,6 +1620,13 @@ export class CninfoProvider implements SourceProvider {
               rawField: field.rawField,
               rawValue: null,
               reasonCode: "UNMAPPED_SOURCE_FIELD",
+              intendedConceptId: requirement.conceptId,
+              intendedPeriod: statementPeriod(
+                column === "current"
+                  ? query
+                  : { ...query, fiscalYear: query.fiscalYear - 1 },
+                field.statement === "balance" ? "instant" : "duration",
+              ),
             }));
             return;
           }
@@ -1355,7 +1650,7 @@ export class CninfoProvider implements SourceProvider {
             concept: field.concept,
             value,
             unit: "CNY",
-            scale: "1",
+            scale: evidence?.scale ?? "1",
             period,
             basis: {
               standard: "CAS",
@@ -1400,6 +1695,14 @@ export class CninfoProvider implements SourceProvider {
                       : `PDF page ${evidence.pageNumber}: ${evidence.rawSnippet}`,
                   ].filter((item) => item !== undefined).join("; "),
                 },
+                ...(evidence?.scale === undefined || evidence.scale === "1"
+                  ? []
+                  : [{
+                      transformId: "statement-unit-scale",
+                      version: "1.0.0",
+                      detail:
+                        `Apply the statement unit scale ${evidence.scale} to canonical CNY`,
+                    }]),
                 ...(column === "comparative"
                   ? [{
                       transformId: "latest-filing-comparative-period",

@@ -5,6 +5,7 @@ import type {
   StoredSnapshotRef,
 } from "@verified-financial/provider-contract";
 import {
+  CanonicalFactSchema,
   ObservationSchema,
   VerifiedFactSetSchema,
   type CanonicalFact,
@@ -26,7 +27,11 @@ interface CachedFactSetRow extends FactSetRow {
 
 interface ExplanationRow {
   fact_set_id: string;
-  fact_set_json: string;
+  fact_json: string;
+}
+
+interface FactRow {
+  fact_json: string;
 }
 
 interface ObservationRow {
@@ -40,6 +45,7 @@ interface MappingVersionRow {
 export interface CachedFactSet {
   factSet: VerifiedFactSet;
   cachedAt: string;
+  lineageFacts: CanonicalFact[];
   observations: Observation[];
   mappingVersions: string[];
 }
@@ -50,6 +56,7 @@ export interface FactExplanation {
   verification: CanonicalFact["verification"];
   observations: Observation[];
   rawSnapshotIds: string[];
+  inputs: FactExplanation[];
 }
 
 export class MetadataStore {
@@ -99,6 +106,10 @@ export class MetadataStore {
         fact_set_json TEXT NOT NULL,
         created_at TEXT NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS facts (
+        fact_id TEXT PRIMARY KEY,
+        fact_json TEXT NOT NULL
+      );
       CREATE TABLE IF NOT EXISTS fact_set_facts (
         fact_set_id TEXT NOT NULL,
         fact_id TEXT NOT NULL,
@@ -131,6 +142,18 @@ export class MetadataStore {
       CREATE INDEX IF NOT EXISTS fact_set_cache_latest
       ON fact_set_cache (cache_key, generated_at DESC, fact_set_id DESC);
     `);
+    const rows = this.database.prepare(`
+      SELECT fact_set_json FROM fact_sets
+    `).all() as FactSetRow[];
+    const putFact = this.database.prepare(`
+      INSERT OR IGNORE INTO facts (fact_id, fact_json) VALUES (?, ?)
+    `);
+    for (const row of rows) {
+      const factSet = VerifiedFactSetSchema.parse(JSON.parse(row.fact_set_json));
+      for (const fact of factSet.facts) {
+        putFact.run(fact.factId, JSON.stringify(fact));
+      }
+    }
   }
 
   putSnapshot(reference: StoredSnapshotRef, storagePath: string): void {
@@ -181,9 +204,11 @@ export class MetadataStore {
     observations: readonly Observation[],
     mappingVersions: readonly string[],
     cacheKey?: string,
+    lineageFacts: readonly CanonicalFact[] = factSet.facts,
   ): void {
     const parsed = VerifiedFactSetSchema.parse(factSet);
     const parsedObservations = ObservationSchema.array().parse(observations);
+    const parsedLineageFacts = CanonicalFactSchema.array().parse(lineageFacts);
     const transaction = this.database.transaction(() => {
       this.database.prepare(`
         INSERT OR REPLACE INTO companies (company_id, company_json)
@@ -210,11 +235,16 @@ export class MetadataStore {
         INSERT OR IGNORE INTO fact_set_facts (fact_set_id, fact_id)
         VALUES (?, ?)
       `);
+      const putFactJson = this.database.prepare(`
+        INSERT OR REPLACE INTO facts (fact_id, fact_json)
+        VALUES (?, ?)
+      `);
       const putFactObservation = this.database.prepare(`
         INSERT OR IGNORE INTO fact_observations (fact_id, observation_id)
         VALUES (?, ?)
       `);
-      for (const fact of parsed.facts) {
+      for (const fact of parsedLineageFacts) {
+        putFactJson.run(fact.factId, JSON.stringify(fact));
         putFact.run(parsed.factSetId, fact.factId);
         for (const observationId of fact.observationIds) {
           putFactObservation.run(fact.factId, observationId);
@@ -236,7 +266,9 @@ export class MetadataStore {
           verification_id, verification_json
         ) VALUES (?, ?)
       `);
-      for (const validation of parsed.validations) {
+      for (const validation of parsedLineageFacts.map((fact) =>
+        fact.verification
+      )) {
         putValidation.run(
           validation.verificationId,
           JSON.stringify(validation),
@@ -297,9 +329,19 @@ export class MetadataStore {
       WHERE fact_set_id = ?
       ORDER BY mapping_version
     `).all(factSet.factSetId) as MappingVersionRow[];
+    const factRows = this.database.prepare(`
+      SELECT f.fact_json
+      FROM fact_set_facts fsf
+      JOIN facts f ON f.fact_id = fsf.fact_id
+      WHERE fsf.fact_set_id = ?
+      ORDER BY f.fact_id
+    `).all(factSet.factSetId) as FactRow[];
     return {
       factSet,
       cachedAt: row.cached_at,
+      lineageFacts: factRows.map((factRow) =>
+        CanonicalFactSchema.parse(JSON.parse(factRow.fact_json))
+      ),
       observations: observationRows.map((observationRow) =>
         ObservationSchema.parse(JSON.parse(observationRow.observation_json))
       ),
@@ -310,18 +352,29 @@ export class MetadataStore {
   }
 
   explainFact(factId: string): FactExplanation | undefined {
+    return this.explainFactRecursive(factId, undefined, new Set());
+  }
+
+  private explainFactRecursive(
+    factId: string,
+    preferredFactSetId: string | undefined,
+    ancestors: ReadonlySet<string>,
+  ): FactExplanation | undefined {
+    if (ancestors.has(factId)) throw new Error("DERIVATION_CYCLE");
     const row = this.database.prepare(`
-      SELECT fs.fact_set_id, fs.fact_set_json
+      SELECT fs.fact_set_id, f.fact_json
       FROM fact_sets fs
       JOIN fact_set_facts fsf ON fsf.fact_set_id = fs.fact_set_id
+      JOIN facts f ON f.fact_id = fsf.fact_id
       WHERE fsf.fact_id = ?
-      ORDER BY fs.created_at DESC, fs.fact_set_id DESC
+      ORDER BY
+        CASE WHEN fs.fact_set_id = ? THEN 0 ELSE 1 END,
+        fs.created_at DESC,
+        fs.fact_set_id DESC
       LIMIT 1
-    `).get(factId) as ExplanationRow | undefined;
+    `).get(factId, preferredFactSetId ?? "") as ExplanationRow | undefined;
     if (row === undefined) return undefined;
-    const factSet = VerifiedFactSetSchema.parse(JSON.parse(row.fact_set_json));
-    const fact = factSet.facts.find((candidate) => candidate.factId === factId);
-    if (fact === undefined) throw new Error("FACT_SET_INDEX_CORRUPTED");
+    const fact = CanonicalFactSchema.parse(JSON.parse(row.fact_json));
     const observationRows = this.database.prepare(`
       SELECT o.observation_json
       FROM observations o
@@ -332,6 +385,19 @@ export class MetadataStore {
     const observations = observationRows.map((observationRow) =>
       ObservationSchema.parse(JSON.parse(observationRow.observation_json))
     );
+    const nextAncestors = new Set(ancestors);
+    nextAncestors.add(factId);
+    const inputs = (fact.derivation?.inputFactIds ?? []).map((inputFactId) => {
+      const input = this.explainFactRecursive(
+        inputFactId,
+        row.fact_set_id,
+        nextAncestors,
+      );
+      if (input === undefined) {
+        throw new Error(`DERIVATION_INPUT_NOT_FOUND:${inputFactId}`);
+      }
+      return input;
+    });
     return {
       factSetId: row.fact_set_id,
       fact,
@@ -342,6 +408,7 @@ export class MetadataStore {
           (observation) => observation.provenance.rawSnapshotId,
         ),
       )].sort(),
+      inputs,
     };
   }
 
