@@ -19,7 +19,8 @@
    尾部截断近期交易日。
 4. TTM 缺口输出概念、截止日、presentation、provider 和上游原因；CNINFO
    未披露、接口失败和已取到但未映射不再合并成一个笼统原因。若年报在
-   “备查文件目录”和财务报表附注之间存在连续空文本页，则进一步标记为
+   “备查文件目录”和财务报表附注之间存在连续空文本页，或年度报告中存在
+   至少六页的连续空文本主表区段，则进一步标记为
    `STATEMENT_IMAGE_ONLY`，仍不回退到报告摘要或附注取数。
 5. 派生过程的所有 input Facts 都写入 SQLite。`explainFact` 递归展开输入
    Fact、Observation 和 raw snapshot；任何 `inputFactId` 缺失都会显式

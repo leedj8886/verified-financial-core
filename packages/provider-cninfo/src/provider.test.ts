@@ -312,6 +312,30 @@ describe("CninfoProvider", () => {
     });
   });
 
+  it("classifies a long blank annual-report section without readable anchors as image-only", () => {
+    const extraction = extractFinancialColumns([
+      "春秋航空股份有限公司 2023 年年度报告\n第九节 债券相关情况",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "ᱛ、㡠グ㛗Գᴿ䲆ޢਮ\n2023 ᒪᓜ䍘ࣗᣛ㺞䱺⌞",
+    ], {
+      fiscalYear: 2023,
+      presentation: "annual",
+    });
+
+    expect(extraction.current).toEqual({});
+    expect(extraction.failures).toMatchObject({
+      "income.revenue": "STATEMENT_IMAGE_ONLY",
+      "income.netProfitParent": "STATEMENT_IMAGE_ONLY",
+      "balance.assets": "STATEMENT_IMAGE_ONLY",
+      "cashFlow.operatingCashFlow": "STATEMENT_IMAGE_ONLY",
+    });
+  });
+
   it("keeps the current plain-integer column in China Southern annual rows", async () => {
     const extraction = extractFinancialColumns([
       await fixture("china-southern-2025fy.txt"),

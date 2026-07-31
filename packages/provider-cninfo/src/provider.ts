@@ -26,7 +26,7 @@ import { extractText, getDocumentProxy } from "unpdf";
 
 const PROVIDER_ID = "cninfo-direct";
 const UPSTREAM_SOURCE_ID = "cninfo";
-const MAPPING_VERSION = "cninfo@1.6.0";
+const MAPPING_VERSION = "cninfo@1.7.0";
 const API_BASE = "https://www.cninfo.com.cn/new/";
 const WEBAPI_BASE = "https://webapi.cninfo.com.cn/";
 const PDF_BASE = "https://static.cninfo.com.cn/";
@@ -799,20 +799,43 @@ function statementCandidates(
   return candidates;
 }
 
-function hasImageOnlyFinancialStatements(pages: readonly string[]): boolean {
+function hasImageOnlyFinancialStatements(
+  pages: readonly string[],
+  expectedPeriod: FinancialExtractionPeriod | undefined,
+): boolean {
   const backupIndex = pages.findIndex((page) =>
     /备查文件目录/.test(page.normalize("NFKC"))
   );
-  if (backupIndex < 0) return false;
-  const notesOffset = pages.slice(backupIndex + 1).findIndex((page) =>
-    /年度财务报表附注/.test(page.normalize("NFKC"))
+  if (backupIndex >= 0) {
+    const notesOffset = pages.slice(backupIndex + 1).findIndex((page) =>
+      /年度财务报表附注/.test(page.normalize("NFKC"))
+    );
+    if (notesOffset >= 0) {
+      const notesIndex = backupIndex + notesOffset + 1;
+      const blankPages = pages.slice(backupIndex + 1, notesIndex)
+        .filter((page) => normalizePdfText(page).length === 0)
+        .length;
+      if (blankPages >= 3) return true;
+    }
+  }
+  if (expectedPeriod?.presentation !== "annual") return false;
+  const annualHeading = new RegExp(
+    `${expectedPeriod.fiscalYear}\\s*年(?:年)?度?报告`,
   );
-  if (notesOffset < 0) return false;
-  const notesIndex = backupIndex + notesOffset + 1;
-  const blankPages = pages.slice(backupIndex + 1, notesIndex)
-    .filter((page) => normalizePdfText(page).length === 0)
-    .length;
-  return blankPages >= 3;
+  if (!pages.some((page) => annualHeading.test(page.normalize("NFKC")))) {
+    return false;
+  }
+  let longestBlankRun = 0;
+  let currentBlankRun = 0;
+  for (const page of pages) {
+    if (normalizePdfText(page).length === 0) {
+      currentBlankRun += 1;
+      longestBlankRun = Math.max(longestBlankRun, currentBlankRun);
+    } else {
+      currentBlankRun = 0;
+    }
+  }
+  return longestBlankRun >= 6;
 }
 
 function parseDecimalToken(raw: string): string {
@@ -1028,7 +1051,10 @@ export function extractFinancialColumns(
     comparativeEvidence: {},
     failures: {},
   };
-  const imageOnlyStatements = hasImageOnlyFinancialStatements(pages);
+  const imageOnlyStatements = hasImageOnlyFinancialStatements(
+    pages,
+    expectedPeriod,
+  );
   for (const field of fieldDefinitions) {
     if (!sections.has(field.statement)) {
       sections.set(
