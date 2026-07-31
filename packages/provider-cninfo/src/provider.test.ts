@@ -274,6 +274,44 @@ describe("CninfoProvider", () => {
     });
   });
 
+  it("classifies blank embedded financial statements as image-only", () => {
+    const extraction = extractFinancialColumns([
+      [
+        "中国东方航空股份有限公司 2023 年度报告",
+        "一、近三年主要会计数据和财务指标",
+        "（一）主要会计数据",
+        "单位：人民币百万元",
+        "主要会计数据 2023 年 2022 年 2021 年",
+        "营业收入 113,741 46,305 46,111 67,339 67,127",
+        "归属于上市公司股东的",
+        "净利润 -8,168 -37,356 -37,386 -12,149 -12,214",
+        "（二）主要财务指标",
+      ].join("\n"),
+      "第九节 备查文件目录",
+      "",
+      "",
+      "",
+      "",
+      "中国东方航空股份有限公司\n2023 年度财务报表附注",
+    ], {
+      fiscalYear: 2023,
+      presentation: "annual",
+    });
+
+    expect(extraction).toMatchObject({
+      current: {},
+      currentEvidence: {},
+      failures: {
+        "income.revenue": "STATEMENT_IMAGE_ONLY",
+        "income.operatingProfit": "STATEMENT_IMAGE_ONLY",
+        "income.netProfit": "STATEMENT_IMAGE_ONLY",
+        "income.netProfitParent": "STATEMENT_IMAGE_ONLY",
+        "balance.assets": "STATEMENT_IMAGE_ONLY",
+        "cashFlow.operatingCashFlow": "STATEMENT_IMAGE_ONLY",
+      },
+    });
+  });
+
   it("keeps the current plain-integer column in China Southern annual rows", async () => {
     const extraction = extractFinancialColumns([
       await fixture("china-southern-2025fy.txt"),
@@ -544,6 +582,50 @@ describe("CninfoProvider", () => {
       expect.objectContaining({
         code: "PARSE_FAILED",
         reasonCode: "STATEMENT_NOT_FOUND",
+        requirements: [expect.objectContaining({
+          conceptId: "income.revenue",
+        })],
+      }),
+    ]));
+    expect(parseProviderBatch(provider, batch)).toEqual(batch);
+  });
+
+  it("preserves an image-only diagnostic instead of treating the report as absent", async () => {
+    const fetchImplementation = vi.fn<FetchImplementation>(
+      async (input) => {
+        const url = new URL(String(input));
+        if (url.pathname.endsWith("/information/topSearch/query")) {
+          return new Response(await fixture("search-600519.json"));
+        }
+        if (url.pathname.endsWith("/hisAnnouncement/query")) {
+          return new Response(await fixture("annual-600519-2025.json"));
+        }
+        return new Response("%PDF-image-only-fixture");
+      },
+    );
+    const provider = new CninfoProvider({
+      fetchImplementation,
+      extractTextImplementation: async () => [
+        "贵州茅台酒股份有限公司 2025 年年度报告",
+        "第九节 备查文件目录",
+        "",
+        "",
+        "",
+        "",
+        "贵州茅台酒股份有限公司\n2025 年度财务报表附注",
+      ],
+      retries: 0,
+    });
+    const batch = await provider.fetch(request, {
+      signal: new AbortController().signal,
+      now: "2026-07-28T10:00:00+08:00",
+      snapshots,
+    });
+
+    expect(batch.issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        code: "PARSE_FAILED",
+        reasonCode: "STATEMENT_IMAGE_ONLY",
         requirements: [expect.objectContaining({
           conceptId: "income.revenue",
         })],

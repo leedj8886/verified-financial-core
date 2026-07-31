@@ -26,7 +26,7 @@ import { extractText, getDocumentProxy } from "unpdf";
 
 const PROVIDER_ID = "cninfo-direct";
 const UPSTREAM_SOURCE_ID = "cninfo";
-const MAPPING_VERSION = "cninfo@1.5.0";
+const MAPPING_VERSION = "cninfo@1.6.0";
 const API_BASE = "https://www.cninfo.com.cn/new/";
 const WEBAPI_BASE = "https://webapi.cninfo.com.cn/";
 const PDF_BASE = "https://static.cninfo.com.cn/";
@@ -799,6 +799,22 @@ function statementCandidates(
   return candidates;
 }
 
+function hasImageOnlyFinancialStatements(pages: readonly string[]): boolean {
+  const backupIndex = pages.findIndex((page) =>
+    /备查文件目录/.test(page.normalize("NFKC"))
+  );
+  if (backupIndex < 0) return false;
+  const notesOffset = pages.slice(backupIndex + 1).findIndex((page) =>
+    /年度财务报表附注/.test(page.normalize("NFKC"))
+  );
+  if (notesOffset < 0) return false;
+  const notesIndex = backupIndex + notesOffset + 1;
+  const blankPages = pages.slice(backupIndex + 1, notesIndex)
+    .filter((page) => normalizePdfText(page).length === 0)
+    .length;
+  return blankPages >= 3;
+}
+
 function parseDecimalToken(raw: string): string {
   const normalized = raw.normalize("NFKC").replace(/[−–—－]/g, "-").trim();
   const parenthesized = normalized.startsWith("(")
@@ -1012,6 +1028,7 @@ export function extractFinancialColumns(
     comparativeEvidence: {},
     failures: {},
   };
+  const imageOnlyStatements = hasImageOnlyFinancialStatements(pages);
   for (const field of fieldDefinitions) {
     if (!sections.has(field.statement)) {
       sections.set(
@@ -1021,7 +1038,9 @@ export function extractFinancialColumns(
     }
     const section = sections.get(field.statement);
     if (section === undefined) {
-      result.failures[field.concept] = "STATEMENT_NOT_FOUND";
+      result.failures[field.concept] = imageOnlyStatements
+        ? "STATEMENT_IMAGE_ONLY"
+        : "STATEMENT_NOT_FOUND";
       continue;
     }
     const extracted = extractRow(section, field);

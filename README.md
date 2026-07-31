@@ -235,8 +235,10 @@ empty response with `DERIVATION_INPUT_UNAVAILABLE_AS_OF` and
 `PROVIDER_INPUT_UNAVAILABLE_AS_OF`. Expected filing gaps use
 `REPORT_NOT_PUBLISHED_AS_OF` instead of `PROVIDER_FAILURE`. CNINFO mapping
 failures also retain a typed detail such as `STATEMENT_NOT_FOUND`,
-`LABEL_NOT_FOUND`, or `COLUMN_LAYOUT_AMBIGUOUS`. TTM ROE, EPS-based P/E, and
-other unsupported non-additive ratios remain fail-closed.
+`STATEMENT_IMAGE_ONLY`, `LABEL_NOT_FOUND`, or `COLUMN_LAYOUT_AMBIGUOUS`.
+Image-only primary statements do not fall back to annual-report summaries or
+notes. TTM ROE, EPS-based P/E, and other unsupported non-additive ratios remain
+fail-closed.
 
 For a period restated by a later filing, verification uses the latest
 publication from each upstream source while retaining all superseded
