@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { createLocalGateway } from "../packages/local-gateway/dist/index.js";
@@ -33,6 +34,7 @@ const metricConcepts = {
 } as const;
 
 type MetricKey = keyof typeof metricConcepts;
+type AuditScope = "financial" | "market";
 
 function optionValues(name: string): string[] {
   const values: string[] = [];
@@ -51,7 +53,8 @@ function requiredOption(name: string): string {
 }
 
 function instrumentFor(code: string): string {
-  return /^[569]/.test(code) ? `${code}.SH` : `${code}.SZ`;
+  if (/^(?:[48]\d{5}|92\d{4})$/.test(code)) return `${code}.BJ`;
+  return /^6/.test(code) ? `${code}.SH` : `${code}.SZ`;
 }
 
 async function loadIndustry(specification: string): Promise<IndustryInput> {
@@ -91,26 +94,18 @@ function request(
   instrument: string,
   asOf: string,
   period: FactPeriodSelector,
+  scope: AuditScope,
 ): FactRequest {
+  const conceptIds = scope === "financial"
+    ? ["income.revenue", "income.netProfitParent"] as const
+    : ["market.cap"] as const;
   return {
     instrument,
-    requirements: [
-      {
-        conceptId: "income.revenue",
-        required: true,
-        period,
-      },
-      {
-        conceptId: "income.netProfitParent",
-        required: true,
-        period,
-      },
-      {
-        conceptId: "market.cap",
-        required: true,
-        period,
-      },
-    ],
+    requirements: conceptIds.map((conceptId) => ({
+      conceptId,
+      required: true,
+      period,
+    })),
     asOf,
     freshness: {
       maxAgeSeconds: 0,
@@ -118,6 +113,115 @@ function request(
       offline: false,
     },
   };
+}
+
+function independentlyCorroborated(
+  factSet: VerifiedFactSet,
+  concept: string,
+): boolean {
+  return factSet.facts.some((fact) =>
+    fact.concept === concept
+    && fact.usable
+    && fact.verification.independentUpstreamSourceIds.length >= 2
+  );
+}
+
+function satisfiesRequiredFacts(
+  factSet: VerifiedFactSet,
+  factRequest: FactRequest,
+): boolean {
+  return factRequest.requirements.filter((requirement) => requirement.required)
+    .every((requirement) => factSet.facts.some((fact) =>
+      fact.concept === requirement.conceptId && fact.usable
+    ));
+}
+
+function hasTransientFailure(factSet: VerifiedFactSet): boolean {
+  return factSet.reasonCodes.some((reason) =>
+    /^PROVIDER_FAILURE:[^:]+:(?:TIMEOUT|AUTH_REQUIRED|RATE_LIMITED|UPSTREAM_UNAVAILABLE)$/.test(
+      reason,
+    )
+  );
+}
+
+async function withTransientRetry(
+  factRequest: FactRequest,
+  load: () => Promise<VerifiedFactSet>,
+  retries: number,
+  delayMs: number,
+): Promise<VerifiedFactSet> {
+  let result = await load();
+  for (
+    let attempt = 0;
+    attempt < retries
+      && !satisfiesRequiredFacts(result, factRequest)
+      && hasTransientFailure(result);
+    attempt += 1
+  ) {
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, delayMs));
+    result = await load();
+  }
+  return result;
+}
+
+function asOfOption(name: string, fallback: string): string {
+  const value = optionValues(name)[0] ?? fallback;
+  if (!Number.isFinite(Date.parse(value))) {
+    throw new Error(`Invalid ${name}: ${value}`);
+  }
+  return value;
+}
+
+function reasonBucket(reason: string): string {
+  if (
+    reason.startsWith("REPORT_NOT_PUBLISHED_AS_OF:")
+    || reason.endsWith(":REPORT_NOT_AVAILABLE_AS_OF")
+  ) {
+    return "expected-point-in-time-availability";
+  }
+  if (
+    reason.includes(":STATEMENT_NOT_FOUND")
+    || reason.includes(":STATEMENT_IMAGE_ONLY")
+    || reason.includes(":TEXT_ENCODING_UNUSABLE")
+    || reason.includes(":COLUMN_LAYOUT_AMBIGUOUS")
+    || reason.includes(":LABEL_NOT_FOUND")
+  ) {
+    return "official-statement-mapping";
+  }
+  if (reason.includes("_UNAVAILABLE_AS_OF:")) {
+    return "historical-revision-unavailable";
+  }
+  if (
+    reason.includes(":TIMEOUT")
+    || reason.includes(":AUTH_REQUIRED")
+    || reason.includes(":RATE_LIMITED")
+    || reason.includes(":UPSTREAM_UNAVAILABLE")
+  ) {
+    return "transient-upstream";
+  }
+  return "other";
+}
+
+function currentCommit(): string | null {
+  try {
+    return execFileSync("git", ["rev-parse", "HEAD"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+  } catch {
+    return null;
+  }
+}
+
+function repositoryDirty(): boolean | null {
+  try {
+    return execFileSync("git", ["status", "--porcelain"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim().length > 0;
+  } catch {
+    return null;
+  }
 }
 
 function usableValue(
@@ -168,6 +272,46 @@ if (industryInputs.length === 0) throw new Error("At least one --industry is req
 const dataDirectory = resolve(requiredOption("--data-dir"));
 const outputPath = resolve(requiredOption("--output"));
 const concurrency = Number(optionValues("--concurrency")[0] ?? "3");
+const transientRetries = Number(optionValues("--transient-retries")[0] ?? "2");
+const transientRetryDelayMs = Number(
+  optionValues("--transient-retry-delay-ms")[0] ?? "1000",
+);
+if (
+  !Number.isInteger(transientRetries)
+  || transientRetries < 0
+  || !Number.isFinite(transientRetryDelayMs)
+  || transientRetryDelayMs < 0
+) {
+  throw new Error("Invalid transient retry options");
+}
+const amountCoverageThreshold = Number(
+  optionValues("--amount-coverage-threshold")[0] ?? "0.8",
+);
+if (
+  !Number.isFinite(amountCoverageThreshold)
+  || amountCoverageThreshold < 0
+  || amountCoverageThreshold > 1
+) {
+  throw new Error(
+    `Invalid --amount-coverage-threshold: ${amountCoverageThreshold}`,
+  );
+}
+const baselineFinancialAsOf = asOfOption(
+  "--baseline-financial-as-of",
+  "2024-08-30T23:59:59+08:00",
+);
+const baselineMarketAsOf = asOfOption(
+  "--baseline-market-as-of",
+  baselineFinancialAsOf,
+);
+const latestFinancialAsOf = asOfOption(
+  "--latest-financial-as-of",
+  "2026-07-29T23:59:59+08:00",
+);
+const latestMarketAsOf = asOfOption(
+  "--latest-market-as-of",
+  latestFinancialAsOf,
+);
 const local = createLocalGateway(dataDirectory);
 const baselinePeriod: FactPeriodSelector = {
   fiscalYear: 2024,
@@ -189,17 +333,60 @@ try {
       concurrency,
       async (company) => {
         const instrument = instrumentFor(company.code);
-        const [baseline, latest] = await Promise.all([
-          local.gateway.getFacts(request(
-            instrument,
-            "2024-08-30T23:59:59+08:00",
-            baselinePeriod,
-          )),
-          local.gateway.getFacts(request(
-            instrument,
-            "2026-07-29T23:59:59+08:00",
-            latestPeriod,
-          )),
+        const baselineFinancialRequest = request(
+          instrument,
+          baselineFinancialAsOf,
+          baselinePeriod,
+          "financial",
+        );
+        const latestFinancialRequest = request(
+          instrument,
+          latestFinancialAsOf,
+          latestPeriod,
+          "financial",
+        );
+        const baselineMarketRequest = request(
+          instrument,
+          baselineMarketAsOf,
+          baselinePeriod,
+          "market",
+        );
+        const latestMarketRequest = request(
+          instrument,
+          latestMarketAsOf,
+          latestPeriod,
+          "market",
+        );
+        const [
+          baselineFinancial,
+          latestFinancial,
+          baselineMarket,
+          latestMarket,
+        ] = await Promise.all([
+          withTransientRetry(
+            baselineFinancialRequest,
+            () => local.gateway.getFacts(baselineFinancialRequest),
+            transientRetries,
+            transientRetryDelayMs,
+          ),
+          withTransientRetry(
+            latestFinancialRequest,
+            () => local.gateway.getFacts(latestFinancialRequest),
+            transientRetries,
+            transientRetryDelayMs,
+          ),
+          withTransientRetry(
+            baselineMarketRequest,
+            () => local.gateway.getFacts(baselineMarketRequest),
+            transientRetries,
+            transientRetryDelayMs,
+          ),
+          withTransientRetry(
+            latestMarketRequest,
+            () => local.gateway.getFacts(latestMarketRequest),
+            transientRetries,
+            transientRetryDelayMs,
+          ),
         ]);
         completed += 1;
         if (completed % 5 === 0 || completed === input.companies.length) {
@@ -208,38 +395,87 @@ try {
           );
         }
         const values = {
-          baseline_revenue: usableValue(baseline, "income.revenue"),
-          latest_revenue: usableValue(latest, "income.revenue"),
-          baseline_profit: usableValue(baseline, "income.netProfitParent"),
-          latest_profit: usableValue(latest, "income.netProfitParent"),
-          baseline_market_cap: usableValue(baseline, "market.cap"),
-          latest_market_cap: usableValue(latest, "market.cap"),
+          baseline_revenue: usableValue(
+            baselineFinancial,
+            "income.revenue",
+          ),
+          latest_revenue: usableValue(latestFinancial, "income.revenue"),
+          baseline_profit: usableValue(
+            baselineFinancial,
+            "income.netProfitParent",
+          ),
+          latest_profit: usableValue(
+            latestFinancial,
+            "income.netProfitParent",
+          ),
+          baseline_market_cap: usableValue(baselineMarket, "market.cap"),
+          latest_market_cap: usableValue(latestMarket, "market.cap"),
         };
-        const financialComplete = [
+        const independentlyCovered = {
+          baseline_revenue: independentlyCorroborated(
+            baselineFinancial,
+            "income.revenue",
+          ),
+          latest_revenue: independentlyCorroborated(
+            latestFinancial,
+            "income.revenue",
+          ),
+          baseline_profit: independentlyCorroborated(
+            baselineFinancial,
+            "income.netProfitParent",
+          ),
+          latest_profit: independentlyCorroborated(
+            latestFinancial,
+            "income.netProfitParent",
+          ),
+          baseline_market_cap: independentlyCorroborated(
+            baselineMarket,
+            "market.cap",
+          ),
+          latest_market_cap: independentlyCorroborated(
+            latestMarket,
+            "market.cap",
+          ),
+        };
+        const baselineFinancialComplete = [
           values.baseline_revenue,
-          values.latest_revenue,
           values.baseline_profit,
+        ].every((value) => value !== null);
+        const latestFinancialComplete = [
+          values.latest_revenue,
           values.latest_profit,
         ].every((value) => value !== null);
-        const marketComplete = [
-          values.baseline_market_cap,
-          values.latest_market_cap,
-        ].every((value) => value !== null)
-          && hasStrictMarketCap(baseline)
-          && hasStrictMarketCap(latest);
+        const financialComplete = baselineFinancialComplete
+          && latestFinancialComplete;
+        const baselineMarketComplete = values.baseline_market_cap !== null
+          && hasStrictMarketCap(baselineMarket);
+        const latestMarketComplete = values.latest_market_cap !== null
+          && hasStrictMarketCap(latestMarket);
+        const marketComplete = baselineMarketComplete && latestMarketComplete;
         return {
           code: company.code,
           name: company.name,
           primary: company,
           values,
+          independentlyCovered,
+          baselineFinancialComplete,
+          latestFinancialComplete,
           financialComplete,
+          baselineMarketComplete,
+          latestMarketComplete,
           marketComplete,
           fullComplete: financialComplete && marketComplete,
-          baselineStatus: baseline.summary.overallStatus,
-          latestStatus: latest.summary.overallStatus,
+          baselineFinancialStatus: baselineFinancial.summary.overallStatus,
+          latestFinancialStatus: latestFinancial.summary.overallStatus,
+          baselineMarketStatus: baselineMarket.summary.overallStatus,
+          latestMarketStatus: latestMarket.summary.overallStatus,
           unresolvedReasons: [
-            ...(financialComplete && marketComplete ? [] : baseline.reasonCodes),
-            ...(financialComplete && marketComplete ? [] : latest.reasonCodes),
+            ...(baselineFinancialComplete
+              ? []
+              : baselineFinancial.reasonCodes),
+            ...(latestFinancialComplete ? [] : latestFinancial.reasonCodes),
+            ...(baselineMarketComplete ? [] : baselineMarket.reasonCodes),
+            ...(latestMarketComplete ? [] : latestMarket.reasonCodes),
           ],
         };
       },
@@ -253,6 +489,10 @@ try {
         company.values[metric] === null
           ? total
           : total + Math.abs(company.primary[metric] ?? 0), 0);
+      const independentNumerator = companyResults.reduce((total, company) =>
+        company.independentlyCovered[metric]
+          ? total + Math.abs(company.primary[metric] ?? 0)
+          : total, 0);
       return {
         metric,
         coveredCompanies: companyResults.filter((company) =>
@@ -261,12 +501,35 @@ try {
         amountNumerator: numerator,
         amountDenominator: denominator,
         amountCoverageRatio: denominator === 0 ? 0 : numerator / denominator,
+        independentlyCoveredCompanies: companyResults.filter((company) =>
+          company.independentlyCovered[metric]
+        ).length,
+        independentAmountNumerator: independentNumerator,
+        independentAmountCoverageRatio: denominator === 0
+          ? 0
+          : independentNumerator / denominator,
       };
     });
+    const failedBaselineMetrics = metricCoverage.filter(({ metric }) =>
+      metric === "baseline_revenue" || metric === "baseline_profit"
+    ).filter(({ amountCoverageRatio }) =>
+      amountCoverageRatio < amountCoverageThreshold
+    );
     const unresolvedReasons = new Map<string, number>();
+    const unresolvedReasonBuckets = new Map<string, number>();
     for (const company of companyResults) {
       for (const reason of new Set(company.unresolvedReasons)) {
         unresolvedReasons.set(reason, (unresolvedReasons.get(reason) ?? 0) + 1);
+      }
+      const companyBuckets = new Set(
+        company.unresolvedReasons.map(reasonBucket),
+      );
+      if (companyBuckets.size > 1) companyBuckets.delete("other");
+      for (const bucket of companyBuckets) {
+        unresolvedReasonBuckets.set(
+          bucket,
+          (unresolvedReasonBuckets.get(bucket) ?? 0) + 1,
+        );
       }
     }
     reports.push({
@@ -281,6 +544,11 @@ try {
       fullCompanyCount: companyResults.filter((company) =>
         company.fullComplete
       ).length,
+      verificationGate: {
+        status: failedBaselineMetrics.length === 0 ? "PASS" : "FAIL",
+        amountCoverageThreshold,
+        failedMetrics: failedBaselineMetrics.map(({ metric }) => metric),
+      },
       metricCoverage,
       unresolvedReasons: [...unresolvedReasons.entries()]
         .map(([reason, companyCount]) => ({ reason, companyCount }))
@@ -288,17 +556,41 @@ try {
           right.companyCount - left.companyCount
           || left.reason.localeCompare(right.reason)
         ),
+      unresolvedReasonBuckets: [...unresolvedReasonBuckets.entries()]
+        .map(([bucket, companyCount]) => ({ bucket, companyCount }))
+        .sort((left, right) =>
+          right.companyCount - left.companyCount
+          || left.bucket.localeCompare(right.bucket)
+        ),
       companies: companyResults,
     });
   }
   const output = {
     generatedAt: new Date().toISOString(),
-    baselineAsOf: "2024-08-30T23:59:59+08:00",
+    coreCommit: currentCommit(),
+    coreDirty: repositoryDirty(),
+    baselineFinancialAsOf,
+    baselineMarketAsOf,
+    baselineKnowledgeMode: baselineFinancialAsOf === baselineMarketAsOf
+      ? "aligned-as-of"
+      : "split-as-of-post-disclosure",
     baselinePeriod,
-    latestAsOf: "2026-07-29T23:59:59+08:00",
+    latestFinancialAsOf,
+    latestMarketAsOf,
+    latestKnowledgeMode: latestFinancialAsOf === latestMarketAsOf
+      ? "aligned-as-of"
+      : "split-as-of",
     latestPeriod,
+    amountCoverageThreshold,
+    transientRetryPolicy: {
+      retries: transientRetries,
+      delayMs: transientRetryDelayMs,
+      onlyWhenRequiredFactsMissing: true,
+    },
     amountCoveragePolicy:
       "sum(abs(primary amount)) for companies with a usable core fact / sum(abs(primary amount)) for all companies",
+    independentCoveragePolicy:
+      "the usable core fact has at least two independent upstream source IDs",
     reports,
   };
   await mkdir(dirname(outputPath), { recursive: true });

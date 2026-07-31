@@ -100,8 +100,23 @@ pnpm audit:industry -- \
   --industry 证券Ⅱ=/path/to/证券Ⅱ_primary.json \
   --data-dir /tmp/vfc-industry-audit \
   --output work/industry-coverage-audit.json \
+  --baseline-financial-as-of 2024-08-30T23:59:59+08:00 \
+  --baseline-market-as-of 2024-08-30T23:59:59+08:00 \
+  --latest-financial-as-of 2026-07-29T23:59:59+08:00 \
+  --latest-market-as-of 2026-07-29T23:59:59+08:00 \
+  --amount-coverage-threshold 0.8 \
+  --transient-retries 2 \
+  --transient-retry-delay-ms 1000 \
   --concurrency 2
 ```
+
+财务和市场截止日默认对齐。若为了事后经济周期比较而使用披露完成后的财务
+截止日，应单独设置 `--baseline-financial-as-of`，输出会标记为
+`split-as-of-post-disclosure`；不得将其描述为估值日当时可知口径。审计结果
+同时给出可用金额覆盖率、双独立来源金额覆盖率，以及基准营收和归母净利润
+未达到阈值时的 `FAIL` 发布门禁。只有必需事实缺失且出现 `TIMEOUT`、
+`AUTH_REQUIRED`、`RATE_LIMITED` 或 `UPSTREAM_UNAVAILABLE` 时才执行审计层
+重试；时点不可得和字段未映射不会重试。
 
 最终机器结果保存在本地
 `work/industry-coverage-audit-20260730-final.json`，未纳入 Git。

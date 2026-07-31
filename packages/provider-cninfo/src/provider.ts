@@ -26,7 +26,7 @@ import { extractText, getDocumentProxy } from "unpdf";
 
 const PROVIDER_ID = "cninfo-direct";
 const UPSTREAM_SOURCE_ID = "cninfo";
-const MAPPING_VERSION = "cninfo@1.4.0";
+const MAPPING_VERSION = "cninfo@1.5.0";
 const API_BASE = "https://www.cninfo.com.cn/new/";
 const WEBAPI_BASE = "https://webapi.cninfo.com.cn/";
 const PDF_BASE = "https://static.cninfo.com.cn/";
@@ -121,6 +121,13 @@ export interface FinancialExtractionEvidence {
   scale: string;
 }
 
+export type FinancialExtractionFailure =
+  | "STATEMENT_NOT_FOUND"
+  | "STATEMENT_IMAGE_ONLY"
+  | "TEXT_ENCODING_UNUSABLE"
+  | "COLUMN_LAYOUT_AMBIGUOUS"
+  | "LABEL_NOT_FOUND";
+
 export interface FinancialColumnExtraction {
   current: Partial<Record<ConceptId, string>>;
   comparative: Partial<Record<ConceptId, string>>;
@@ -128,6 +135,7 @@ export interface FinancialColumnExtraction {
   comparativeEvidence: Partial<
     Record<ConceptId, FinancialExtractionEvidence>
   >;
+  failures: Partial<Record<ConceptId, FinancialExtractionFailure>>;
 }
 
 const fieldDefinitions: readonly FieldDefinition[] = [
@@ -258,19 +266,46 @@ const definitionsByConcept = new Map(
 
 const statementBoundaries: Record<
   StatementKind,
-  { start: string; end: string }
+  { starts: readonly string[]; ends: readonly string[] }
 > = {
   balance: {
-    start: "合并资产负债表",
-    end: "母公司资产负债表",
+    starts: [
+      "合并资产负债表",
+      "合并及公司资产负债表",
+      "合并及母公司资产负债表",
+    ],
+    ends: [
+      "母公司资产负债表",
+      "合并利润表",
+      "合并及公司利润表",
+      "合并及母公司利润表",
+    ],
   },
   income: {
-    start: "合并利润表",
-    end: "母公司利润表",
+    starts: [
+      "合并利润表",
+      "合并及公司利润表",
+      "合并及母公司利润表",
+    ],
+    ends: [
+      "母公司利润表",
+      "合并现金流量表",
+      "合并及公司现金流量表",
+      "合并及母公司现金流量表",
+    ],
   },
   cashFlow: {
-    start: "合并现金流量表",
-    end: "母公司现金流量表",
+    starts: [
+      "合并现金流量表",
+      "合并及公司现金流量表",
+      "合并及母公司现金流量表",
+    ],
+    ends: [
+      "母公司现金流量表",
+      "合并所有者权益变动表",
+      "合并及公司所有者权益变动表",
+      "合并及母公司所有者权益变动表",
+    ],
   },
 };
 
@@ -673,16 +708,23 @@ interface StatementCandidate {
   text: string;
   labelText: string;
   labelOffsets: number[];
+  financialColumnCount: 2 | 4;
   pageOffsets: Array<{ offset: number; pageNumber: number }>;
 }
 
 const DECIMAL_TOKEN =
   /(?:\(\s*\+?\s*\d[\d,]*(?:\.\d+)?\s*\)|[+-]\s*\d[\d,]*(?:\.\d+)?|\d[\d,]*(?:\.\d+)?)/g;
 
-function exactHeadingPattern(heading: string): RegExp {
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function exactHeadingPattern(headings: readonly string[]): RegExp {
   return new RegExp(
     `^\\s*(?:[一二三四五六七八九十\\d]+[、.．]\\s*)?`
-    + `${heading}(?:\\s*[（(][^\\n]*[）)])?\\s*$`,
+    + `(?:截至[^\\n]{0,80}?期间\\s*)?`
+    + `(${headings.map(escapeRegExp).join("|")})`
+    + `(?:\\s*[（(][^\\n]*[）)])?\\s*$`,
     "m",
   );
 }
@@ -707,8 +749,8 @@ function statementCandidates(
   statement: StatementKind,
 ): StatementCandidate[] {
   const boundary = statementBoundaries[statement];
-  const startPattern = exactHeadingPattern(boundary.start);
-  const endPattern = exactHeadingPattern(boundary.end);
+  const startPattern = exactHeadingPattern(boundary.starts);
+  const endPattern = exactHeadingPattern(boundary.ends);
   const candidates: StatementCandidate[] = [];
   for (let pageIndex = 0; pageIndex < pages.length; pageIndex += 1) {
     const page = pages[pageIndex]!.normalize("NFKC");
@@ -748,6 +790,9 @@ function statementCandidates(
       pageNumber: pageIndex + 1,
       text,
       ...labelProjection(text),
+      financialColumnCount: /合并及(?:母)?公司/.test(start[1] ?? "")
+        ? 4
+        : 2,
       pageOffsets,
     });
   }
@@ -806,7 +851,16 @@ function numericLineAfterLabel(
 function financialValueTokens(
   line: string,
   tokens: RegExpMatchArray[],
+  financialColumnCount: 2 | 4,
 ): RegExpMatchArray[] {
+  if (financialColumnCount === 4) {
+    if (tokens.length >= financialColumnCount) {
+      return tokens.slice(-financialColumnCount, -financialColumnCount + 2);
+    }
+    // Ownership-attribution rows can legitimately omit standalone-company
+    // values even in a combined consolidated/company statement.
+    return financialValueTokens(line, tokens, 2);
+  }
   const first = tokens[0];
   if (first === undefined) return [];
   const prefix = line.slice(0, first.index ?? 0);
@@ -832,10 +886,13 @@ function extractRow(
   comparative?: string;
   currentEvidence?: FinancialExtractionEvidence;
   comparativeEvidence?: FinancialExtractionEvidence;
+  detailReasonCode?: FinancialExtractionFailure;
 } {
+  let matchedLabel = false;
   for (const label of field.labels) {
     const match = label.exec(section.labelText);
     if (match === null) continue;
+    matchedLabel = true;
     const matchStart = section.labelOffsets[match.index];
     const matchEnd = section.labelOffsets[
       match.index + match[0].length - 1
@@ -849,7 +906,11 @@ function extractRow(
     // Some issuers render the statement note as `四 (41)` while others render
     // it as a plain `39`. Keep that column out of the two financial columns
     // without treating a trailing PDF page counter as an inline note.
-    const tokens = financialValueTokens(numericLine.line, numericLine.tokens);
+    const tokens = financialValueTokens(
+      numericLine.line,
+      numericLine.tokens,
+      section.financialColumnCount,
+    );
     const current = tokens[0];
     if (current === undefined) continue;
     const rawSnippet = section.text.slice(matchStart, numericLine.end).trim();
@@ -877,7 +938,11 @@ function extractRow(
           }),
     };
   }
-  return {};
+  return {
+    detailReasonCode: matchedLabel
+      ? "COLUMN_LAYOUT_AMBIGUOUS"
+      : "LABEL_NOT_FOUND",
+  };
 }
 
 function expectedPeriodTokens(period: FinancialExtractionPeriod): string[] {
@@ -945,6 +1010,7 @@ export function extractFinancialColumns(
     comparative: {},
     currentEvidence: {},
     comparativeEvidence: {},
+    failures: {},
   };
   for (const field of fieldDefinitions) {
     if (!sections.has(field.statement)) {
@@ -954,7 +1020,10 @@ export function extractFinancialColumns(
       );
     }
     const section = sections.get(field.statement);
-    if (section === undefined) continue;
+    if (section === undefined) {
+      result.failures[field.concept] = "STATEMENT_NOT_FOUND";
+      continue;
+    }
     const extracted = extractRow(section, field);
     if (extracted.current !== undefined) {
       result.current[field.concept] = extracted.current;
@@ -968,6 +1037,12 @@ export function extractFinancialColumns(
         result.comparativeEvidence[field.concept] =
           extracted.comparativeEvidence;
       }
+    }
+    if (
+      extracted.current === undefined
+      && extracted.detailReasonCode !== undefined
+    ) {
+      result.failures[field.concept] = extracted.detailReasonCode;
     }
   }
   return result;
@@ -1687,6 +1762,9 @@ export class CninfoProvider implements SourceProvider {
           const value = values[requirement.conceptId];
           if (value === undefined) {
             if (column === "comparative") return;
+            const detailReasonCode = extraction.failures[
+              requirement.conceptId
+            ] ?? "LABEL_NOT_FOUND";
             unmapped.push(UnmappedObservationSchema.parse({
               unmappedId: stableId("unmapped", {
                 documentId: announcement.announcementId,
@@ -1707,6 +1785,14 @@ export class CninfoProvider implements SourceProvider {
                 field.statement === "balance" ? "instant" : "duration",
               ),
             }));
+            issues.push({
+              providerId: this.providerId,
+              code: "PARSE_FAILED",
+              message: `${detailReasonCode}: ${field.rawField}`,
+              retryable: false,
+              reasonCode: detailReasonCode,
+              requirements: [requirement],
+            });
             return;
           }
           const periodQuery = column === "current"
@@ -1766,7 +1852,7 @@ export class CninfoProvider implements SourceProvider {
                 },
                 {
                   transformId: "consolidated-statement-column-match",
-                  version: "3.0.0",
+                  version: "4.0.0",
                   detail: [
                     `Read the ${column} column from the selected consolidated statement`,
                     evidence === undefined

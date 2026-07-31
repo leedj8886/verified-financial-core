@@ -218,6 +218,7 @@ request or cache identity. It currently derives:
 
 - free cash flow from operating cash flow minus capex;
 - TTM additive income/cash-flow facts when the fiscal quarter is explicit;
+- annual ROE from profit and average opening/closing equity;
 - market cap from same-period close price and shares outstanding.
 
 Every derived fact records its formula and input Fact/Observation lineage.
@@ -229,8 +230,13 @@ input reason such as
 `DERIVATION_INPUT_MISSING:income.revenue:2023-06-30:ytd`. Provider causes add
 the provider, concept, period, and cause, for example
 `PROVIDER_INPUT_MISSING:cninfo-direct:income.revenue:2024-06-30:ytd:REPORT_NOT_AVAILABLE_AS_OF`.
-ROE, EPS-based P/E, and other non-additive ratios are intentionally not
-inferred.
+An observation published after the request cutoff is distinguished from an
+empty response with `DERIVATION_INPUT_UNAVAILABLE_AS_OF` and
+`PROVIDER_INPUT_UNAVAILABLE_AS_OF`. Expected filing gaps use
+`REPORT_NOT_PUBLISHED_AS_OF` instead of `PROVIDER_FAILURE`. CNINFO mapping
+failures also retain a typed detail such as `STATEMENT_NOT_FOUND`,
+`LABEL_NOT_FOUND`, or `COLUMN_LAYOUT_AMBIGUOUS`. TTM ROE, EPS-based P/E, and
+other unsupported non-additive ratios remain fail-closed.
 
 For a period restated by a later filing, verification uses the latest
 publication from each upstream source while retaining all superseded

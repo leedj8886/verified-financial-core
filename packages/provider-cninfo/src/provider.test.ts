@@ -250,6 +250,30 @@ describe("CninfoProvider", () => {
     });
   });
 
+  it("selects consolidated columns from China Eastern combined statements", async () => {
+    const extraction = extractFinancialColumns([
+      await fixture("china-eastern-2023h1-combined.txt"),
+    ], {
+      fiscalYear: 2023,
+      fiscalQuarter: 2,
+      presentation: "ytd",
+    });
+    expect(extraction).toMatchObject({
+      current: {
+        "income.revenue": "49425",
+        "income.netProfitParent": "-6249",
+      },
+      comparative: {
+        "income.revenue": "19354",
+        "income.netProfitParent": "-18736",
+      },
+      currentEvidence: {
+        "income.revenue": { scale: "1000000" },
+        "income.netProfitParent": { scale: "1000000" },
+      },
+    });
+  });
+
   it("keeps the current plain-integer column in China Southern annual rows", async () => {
     const extraction = extractFinancialColumns([
       await fixture("china-southern-2025fy.txt"),
@@ -481,6 +505,51 @@ describe("CninfoProvider", () => {
       && item.provenance.extractionMethod === "pdf"
       && item.availability.filingDate === "2026-04-17"
     )).toBe(true);
+  });
+
+  it("preserves a typed statement diagnostic when the main table is absent", async () => {
+    const fetchImplementation = vi.fn<FetchImplementation>(
+      async (input) => {
+        const url = new URL(String(input));
+        if (url.pathname.endsWith("/information/topSearch/query")) {
+          return new Response(await fixture("search-600519.json"));
+        }
+        if (url.pathname.endsWith("/hisAnnouncement/query")) {
+          return new Response(await fixture("annual-600519-2025.json"));
+        }
+        return new Response("%PDF-image-only-fixture");
+      },
+    );
+    const provider = new CninfoProvider({
+      fetchImplementation,
+      extractTextImplementation: async () => [
+        "贵州茅台酒股份有限公司 2025 年年度报告\n财务报表附注",
+      ],
+      retries: 0,
+    });
+    const batch = await provider.fetch(request, {
+      signal: new AbortController().signal,
+      now: "2026-07-28T10:00:00+08:00",
+      snapshots,
+    });
+
+    expect(batch.unmapped).not.toHaveLength(0);
+    expect(batch.unmapped).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        intendedConceptId: "income.revenue",
+        reasonCode: "UNMAPPED_SOURCE_FIELD",
+      }),
+    ]));
+    expect(batch.issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        code: "PARSE_FAILED",
+        reasonCode: "STATEMENT_NOT_FOUND",
+        requirements: [expect.objectContaining({
+          conceptId: "income.revenue",
+        })],
+      }),
+    ]));
+    expect(parseProviderBatch(provider, batch)).toEqual(batch);
   });
 
   it("aggregates implemented official dividends and excludes ambiguous records", async () => {

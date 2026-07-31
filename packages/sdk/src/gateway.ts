@@ -42,7 +42,14 @@ import {
   materializeRequestedFacts,
 } from "./derivation-orchestrator.js";
 
-const DEFAULT_VALIDATION_RULES_VERSION = "1.8.0";
+const DEFAULT_VALIDATION_RULES_VERSION = "1.9.0";
+const PROVIDER_MAPPING_REASON_CODES = new Set([
+  "STATEMENT_NOT_FOUND",
+  "STATEMENT_IMAGE_ONLY",
+  "TEXT_ENCODING_UNUSABLE",
+  "COLUMN_LAYOUT_AMBIGUOUS",
+  "LABEL_NOT_FOUND",
+]);
 
 export class GatewayError extends Error {
   readonly code: "NOT_FOUND" | "INVALID_INPUT" | "STORAGE_ERROR";
@@ -89,6 +96,15 @@ interface AssembledFactSet {
 }
 
 function providerReason(issue: ProviderIssue): string {
+  if (issue.reasonCode === "REPORT_NOT_AVAILABLE_AS_OF") {
+    return `REPORT_NOT_PUBLISHED_AS_OF:${issue.providerId}`;
+  }
+  if (
+    issue.reasonCode !== undefined
+    && PROVIDER_MAPPING_REASON_CODES.has(issue.reasonCode)
+  ) {
+    return `PROVIDER_MAPPING_FAILURE:${issue.providerId}:${issue.reasonCode}`;
+  }
   return `PROVIDER_FAILURE:${issue.providerId}:${issue.code}`;
 }
 
@@ -116,6 +132,7 @@ function sameRequirement(
 function providerInputReasons(
   outcomes: readonly ProviderOutcome[],
   materializedReasonCodes: readonly string[],
+  asOf: string,
 ): string[] {
   const missing = new Set(
     materializedReasonCodes.filter((reasonCode) =>
@@ -138,6 +155,18 @@ function providerInputReasons(
       const providerId = outcome.batch?.providerId
         ?? issue?.providerId;
       if (providerId === undefined) return [];
+      const unavailable = outcome.batch?.observations.some((observation) =>
+        observationMatchesRequirement(observation, requirement)
+        && !isAvailableAsOf(observation.availability, asOf)
+      ) === true;
+      if (unavailable) {
+        const dependency = `${requirement.conceptId}:`
+          + `${selectorEndDate(period)}:${period.presentation}`;
+        return [
+          `DERIVATION_INPUT_UNAVAILABLE_AS_OF:${dependency}`,
+          `PROVIDER_INPUT_UNAVAILABLE_AS_OF:${providerId}:${dependency}`,
+        ];
+      }
       return [
         `PROVIDER_INPUT_MISSING:${providerId}:${requirement.conceptId}:`
         + `${selectorEndDate(period)}:${period.presentation}:`
@@ -145,6 +174,17 @@ function providerInputReasons(
       ];
     })
   );
+}
+
+function observationMatchesRequirement(
+  observation: Observation,
+  requirement: FactRequirement,
+): boolean {
+  if (observation.concept !== requirement.conceptId) return false;
+  if (requirement.period === undefined) return true;
+  return observation.period.fiscalYear === requirement.period.fiscalYear
+    && observation.period.fiscalQuarter === requirement.period.fiscalQuarter
+    && observation.period.presentation === requirement.period.presentation;
 }
 
 function unmappedInputReasons(batches: readonly ProviderBatch[]): string[] {
@@ -519,7 +559,7 @@ export class FinancialGateway {
       : ["PROVIDER_COMPANY_IDENTITY_CONFLICT"];
     const reasonCodes = [
       ...issues.map(providerReason),
-      ...providerInputReasons(outcomes, materialized.reasonCodes),
+      ...providerInputReasons(outcomes, materialized.reasonCodes, request.asOf),
       ...unmappedInputReasons(sameCompanyBatches),
       ...unavailableReasons,
       ...instrumentScopeReasons,
@@ -720,7 +760,9 @@ export class FinancialGateway {
     );
 
     const hasProviderFailure = outcomes.some(
-      (outcome) => outcome.issues.length > 0,
+      (outcome) => outcome.issues.some((issue) =>
+        issue.reasonCode !== "REPORT_NOT_AVAILABLE_AS_OF"
+      ),
     );
     if (
       assembled.factSet.summary.overallStatus === "failed"

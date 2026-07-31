@@ -947,6 +947,133 @@ describe("FinancialGateway", () => {
     );
   });
 
+  it("distinguishes a future TTM input from an empty provider response", async () => {
+    const basis: AccountingBasis = {
+      standard: "CAS",
+      scope: "consolidated",
+      presentation: "reported",
+      attribution: "parent",
+      currency: "CNY",
+    };
+    const fixture = makeDerivationProvider({
+      providerId: "historical-revision",
+      capabilities: ["financials"],
+      records: [
+        {
+          concept: "income.revenue",
+          value: "80",
+          unit: "CNY",
+          period: {
+            kind: "duration",
+            startDate: "2024-01-01",
+            endDate: "2024-06-30",
+            fiscalYear: 2024,
+            fiscalQuarter: 2,
+            presentation: "ytd",
+          },
+          basis,
+          publishedAt: "2024-08-20T18:00:00+08:00",
+        },
+        {
+          concept: "income.revenue",
+          value: "100",
+          unit: "CNY",
+          period: {
+            kind: "duration",
+            startDate: "2023-01-01",
+            endDate: "2023-12-31",
+            fiscalYear: 2023,
+            presentation: "annual",
+          },
+          basis,
+          publishedAt: "2024-03-20T18:00:00+08:00",
+        },
+        {
+          concept: "income.revenue",
+          value: "40",
+          unit: "CNY",
+          period: {
+            kind: "duration",
+            startDate: "2023-01-01",
+            endDate: "2023-06-30",
+            fiscalYear: 2023,
+            fiscalQuarter: 2,
+            presentation: "ytd",
+          },
+          basis,
+          publishedAt: "2025-04-22T18:00:00+08:00",
+        },
+      ],
+    });
+    const { gateway } = await makeGateway([fixture.provider]);
+    const factSet = await gateway.getFacts({
+      instrument: "600519.SH",
+      requirements: [{
+        conceptId: "income.revenue",
+        required: true,
+        period: {
+          fiscalYear: 2024,
+          fiscalQuarter: 2,
+          presentation: "ttm",
+        },
+      }],
+      asOf: "2024-08-30T23:59:59+08:00",
+    });
+
+    expect(factSet.reasonCodes).toContain(
+      "DERIVATION_INPUT_UNAVAILABLE_AS_OF:income.revenue:2023-06-30:ytd",
+    );
+    expect(factSet.reasonCodes).toContain(
+      "PROVIDER_INPUT_UNAVAILABLE_AS_OF:historical-revision:"
+      + "income.revenue:2023-06-30:ytd",
+    );
+    expect(factSet.reasonCodes).not.toContain(
+      "PROVIDER_INPUT_MISSING:historical-revision:"
+      + "income.revenue:2023-06-30:ytd:EMPTY_RESPONSE",
+    );
+  });
+
+  it("does not classify an expected report gap as a provider failure", async () => {
+    const provider: SourceProvider = {
+      providerId: "official-filings",
+      upstreamSourceId: "official-filings",
+      capabilities: ["financials"],
+      async fetch(providerRequest) {
+        return {
+          providerId: "official-filings",
+          upstreamSourceId: "official-filings",
+          company: {
+            companyId: providerRequest.instrument.companyId,
+            legalName: "Fixture Company",
+            jurisdiction: "CN",
+          },
+          instruments: [providerRequest.instrument],
+          observations: [],
+          unmapped: [],
+          rawSnapshots: [],
+          mappingVersions: ["official-filings@1"],
+          issues: [{
+            providerId: "official-filings",
+            code: "EMPTY_RESPONSE",
+            message: "The report was not published by the cutoff",
+            retryable: false,
+            reasonCode: "REPORT_NOT_AVAILABLE_AS_OF",
+            requirements: providerRequest.requirements,
+          }],
+        };
+      },
+    };
+    const { gateway } = await makeGateway([provider]);
+    const factSet = await gateway.getFacts(request);
+
+    expect(factSet.reasonCodes).toContain(
+      "REPORT_NOT_PUBLISHED_AS_OF:official-filings",
+    );
+    expect(factSet.reasonCodes).not.toContain(
+      "PROVIDER_FAILURE:official-filings:EMPTY_RESPONSE",
+    );
+  });
+
   it("derives market cap from price and shares and caches the result", async () => {
     const basis: AccountingBasis = {
       standard: "OTHER",
