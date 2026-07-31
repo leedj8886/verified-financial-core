@@ -226,6 +226,79 @@ describe("CninfoProvider", () => {
     });
   });
 
+  it("extracts China Southern interim rows after an inline note column", async () => {
+    const extraction = extractFinancialColumns([
+      await fixture("china-southern-2023h1.txt"),
+    ], {
+      fiscalYear: 2023,
+      fiscalQuarter: 2,
+      presentation: "ytd",
+    });
+    expect(extraction).toMatchObject({
+      current: {
+        "income.revenue": "71830",
+        "income.netProfitParent": "-2875",
+      },
+      comparative: {
+        "income.revenue": "40817",
+        "income.netProfitParent": "-11488",
+      },
+      currentEvidence: {
+        "income.revenue": { scale: "1000000" },
+        "income.netProfitParent": { scale: "1000000" },
+      },
+    });
+  });
+
+  it("keeps the current plain-integer column in China Southern annual rows", async () => {
+    const extraction = extractFinancialColumns([
+      await fixture("china-southern-2025fy.txt"),
+    ], {
+      fiscalYear: 2025,
+      presentation: "annual",
+    });
+    expect(extraction).toMatchObject({
+      current: {
+        "income.revenue": "182256",
+        "income.netProfitParent": "857",
+      },
+      comparative: {
+        "income.revenue": "174224",
+        "income.netProfitParent": "-1696",
+      },
+      currentEvidence: {
+        "income.revenue": { scale: "1000000" },
+        "income.netProfitParent": { scale: "1000000" },
+      },
+    });
+  });
+
+  it("does not concatenate China Southern quarterly columns or the next row", async () => {
+    const extraction = extractFinancialColumns([
+      await fixture("china-southern-2025q1.txt"),
+    ], {
+      fiscalYear: 2025,
+      fiscalQuarter: 1,
+      presentation: "ytd",
+    });
+    expect(extraction).toMatchObject({
+      current: {
+        "income.revenue": "43407",
+        "income.netProfitParent": "-747",
+      },
+      comparative: {
+        "income.revenue": "44601",
+        "income.netProfitParent": "756",
+      },
+      currentEvidence: {
+        "income.netProfitParent": {
+          scale: "1000000",
+          rawSnippet: expect.not.stringContaining("少数股东损益"),
+        },
+      },
+    });
+  });
+
   it("extracts current and restated comparative columns from one filing", async () => {
     const text = await fixture("quarterly-comparative-600150-2026q1.txt");
     expect(extractFinancialColumns([text], {

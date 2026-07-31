@@ -26,7 +26,7 @@ import { extractText, getDocumentProxy } from "unpdf";
 
 const PROVIDER_ID = "cninfo-direct";
 const UPSTREAM_SOURCE_ID = "cninfo";
-const MAPPING_VERSION = "cninfo@1.3.0";
+const MAPPING_VERSION = "cninfo@1.4.0";
 const API_BASE = "https://www.cninfo.com.cn/new/";
 const WEBAPI_BASE = "https://webapi.cninfo.com.cn/";
 const PDF_BASE = "https://static.cninfo.com.cn/";
@@ -657,18 +657,27 @@ function comparativeRequirements(
 function normalizePdfText(value: string): string {
   return value.normalize("NFKC")
     .replace(/[−–—－]/g, "-")
-    .replace(/(?<=[\p{Script=Han}])\s+(?=[\p{Script=Han}])/gu, "")
-    .replace(/\s+/g, " ");
+    .replace(/\r\n?/g, "\n")
+    .replace(
+      /(?<=[\p{Script=Han}])[^\S\n]+(?=[\p{Script=Han}])/gu,
+      "",
+    )
+    .replace(/[^\S\n]+/g, " ")
+    .replace(/ *\n */g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 }
 
 interface StatementCandidate {
   pageNumber: number;
   text: string;
+  labelText: string;
+  labelOffsets: number[];
   pageOffsets: Array<{ offset: number; pageNumber: number }>;
 }
 
 const DECIMAL_TOKEN =
-  /(?:\(\s*\+?\s*\d(?:[\d,\s]*\d)?(?:\s*\.\s*\d+)?\s*\)|[+-]\s*\d(?:[\d,\s]*\d)?(?:\s*\.\s*\d+)?|\d[\d,]*\s*\.\s*\d+|\d{1,3}(?:,\d{3})+)/g;
+  /(?:\(\s*\+?\s*\d[\d,]*(?:\.\d+)?\s*\)|[+-]\s*\d[\d,]*(?:\.\d+)?|\d[\d,]*(?:\.\d+)?)/g;
 
 function exactHeadingPattern(heading: string): RegExp {
   return new RegExp(
@@ -676,6 +685,21 @@ function exactHeadingPattern(heading: string): RegExp {
     + `${heading}(?:\\s*[（(][^\\n]*[）)])?\\s*$`,
     "m",
   );
+}
+
+function labelProjection(text: string): {
+  labelText: string;
+  labelOffsets: number[];
+} {
+  let labelText = "";
+  const labelOffsets: number[] = [];
+  for (let offset = 0; offset < text.length; offset += 1) {
+    const character = text[offset]!;
+    if (character === "\n") continue;
+    labelText += character;
+    labelOffsets.push(offset);
+  }
+  return { labelText, labelOffsets };
 }
 
 function statementCandidates(
@@ -713,14 +737,19 @@ function statementCandidates(
     const pageOffsets: StatementCandidate["pageOffsets"] = [];
     let text = "";
     for (const [offset, normalizedPage] of normalizedPages.entries()) {
-      if (text.length > 0) text += " ";
+      if (text.length > 0) text += "\n";
       pageOffsets.push({
         offset: text.length,
         pageNumber: pageIndex + offset + 1,
       });
       text += normalizedPage;
     }
-    candidates.push({ pageNumber: pageIndex + 1, text, pageOffsets });
+    candidates.push({
+      pageNumber: pageIndex + 1,
+      text,
+      ...labelProjection(text),
+      pageOffsets,
+    });
   }
   return candidates;
 }
@@ -741,14 +770,58 @@ function parseDecimalToken(raw: string): string {
 }
 
 function statementScale(text: string): string {
-  const unit = /(?:金额)?单位[:：]\s*(?:人民币)?\s*(百万元|万元|千元|元)/
-    .exec(text.slice(0, 800))?.[1];
+  const unit =
+    /(?:金额)?单位(?:\s*[:：]\s*|\s*为\s*)(?:人民币)?\s*(百万元|万元|千元|元)/
+      .exec(text.slice(0, 1200))?.[1];
   return {
     元: "1",
     千元: "1000",
     万元: "10000",
     百万元: "1000000",
   }[unit ?? "元"] ?? "1";
+}
+
+function startsNewStatementRow(line: string): boolean {
+  return /^\s*(?:[一二三四五六七八九十]+[、.．]|\d+[.、．])/.test(line);
+}
+
+function numericLineAfterLabel(
+  text: string,
+  labelEnd: number,
+): { line: string; end: number; tokens: RegExpMatchArray[] } | undefined {
+  let cursor = labelEnd;
+  for (let lineOffset = 0; lineOffset < 4; lineOffset += 1) {
+    const lineEnd = text.indexOf("\n", cursor);
+    const end = lineEnd === -1 ? text.length : lineEnd;
+    const line = text.slice(cursor, end).trim();
+    if (lineOffset > 0 && startsNewStatementRow(line)) return undefined;
+    const tokens = [...line.matchAll(DECIMAL_TOKEN)];
+    if (tokens.length > 0) return { line, end, tokens };
+    if (lineEnd === -1) return undefined;
+    cursor = lineEnd + 1;
+  }
+  return undefined;
+}
+
+function financialValueTokens(
+  line: string,
+  tokens: RegExpMatchArray[],
+): RegExpMatchArray[] {
+  const first = tokens[0];
+  if (first === undefined) return [];
+  const prefix = line.slice(0, first.index ?? 0);
+  const explicitNoteReference =
+    /[一二三四五六七八九十]\s*$/.test(prefix)
+    && /^\(\s*\d{1,3}\s*\)$/.test(first[0]);
+  const plainNoteReference = tokens.length === 3
+    && /^\d{1,3}$/.test(first[0])
+    && !/^\s*\//.test(
+      line.slice((tokens[2]!.index ?? 0) + tokens[2]![0].length),
+    );
+  return tokens.slice(
+    explicitNoteReference || plainNoteReference ? 1 : 0,
+    explicitNoteReference || plainNoteReference ? 3 : 2,
+  );
 }
 
 function extractRow(
@@ -761,22 +834,28 @@ function extractRow(
   comparativeEvidence?: FinancialExtractionEvidence;
 } {
   for (const label of field.labels) {
-    const match = label.exec(section.text);
+    const match = label.exec(section.labelText);
     if (match === null) continue;
-    const valueWindow = section.text.slice(
-      match.index + match[0].length,
-      match.index + match[0].length + 240,
+    const matchStart = section.labelOffsets[match.index];
+    const matchEnd = section.labelOffsets[
+      match.index + match[0].length - 1
+    ];
+    if (matchStart === undefined || matchEnd === undefined) continue;
+    const numericLine = numericLineAfterLabel(
+      section.text,
+      matchEnd + 1,
     );
-    const tokens = [...valueWindow.matchAll(DECIMAL_TOKEN)].slice(0, 2);
+    if (numericLine === undefined) continue;
+    // Some issuers render the statement note as `四 (41)` while others render
+    // it as a plain `39`. Keep that column out of the two financial columns
+    // without treating a trailing PDF page counter as an inline note.
+    const tokens = financialValueTokens(numericLine.line, numericLine.tokens);
     const current = tokens[0];
     if (current === undefined) continue;
-    const snippetEnd = match.index + match[0].length
-      + (tokens.at(-1)?.index ?? 0)
-      + (tokens.at(-1)?.[0].length ?? 0);
-    const rawSnippet = section.text.slice(match.index, snippetEnd).trim();
+    const rawSnippet = section.text.slice(matchStart, numericLine.end).trim();
     const pageNumber = [...section.pageOffsets]
       .reverse()
-      .find((item) => item.offset <= match.index)?.pageNumber
+      .find((item) => item.offset <= matchStart)?.pageNumber
       ?? section.pageNumber;
     const scale = statementScale(section.text);
     return {
@@ -1687,7 +1766,7 @@ export class CninfoProvider implements SourceProvider {
                 },
                 {
                   transformId: "consolidated-statement-column-match",
-                  version: "2.0.0",
+                  version: "3.0.0",
                   detail: [
                     `Read the ${column} column from the selected consolidated statement`,
                     evidence === undefined
