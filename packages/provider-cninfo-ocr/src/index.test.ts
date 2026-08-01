@@ -2,6 +2,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { extractFinancialColumns } from "@verified-financial/provider-cninfo";
 import {
   createCninfoOcrTextExtractor,
   findOcrCandidatePages,
@@ -53,6 +54,20 @@ describe("CNINFO OCR adapter", () => {
       "第 7 页 共 153 页",
       "财务报表附注 2024 年 1-6 月",
     ])).toEqual([4, 5, 6, 7, 8, 9]);
+  });
+
+  it("selects image statements hidden behind repeated notes headers", () => {
+    const notesHeader = (page: number) =>
+      `西部证券股份有限公司财务报表附注\n`
+      + "2024 年 1 月 1 日至 2024 年 6 月 30 日\n"
+      + `（除特别注明外，金额单位为人民币元）\n${page}`;
+    expect(findOcrCandidatePages([
+      "第九节 财务报告\n一、财务报表（附后）",
+      `第十节 债券相关情况正文${"。正常文本".repeat(24)}`,
+      "",
+      ...Array.from({ length: 9 }, (_, index) => notesHeader(index + 69)),
+      `${notesHeader(78)}\n财务报表附注\n一、公司基本情况及正文。`,
+    ])).toEqual([3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
   });
 
   it("does not OCR low-information front matter without statement anchors", () => {
@@ -111,9 +126,11 @@ describe("CNINFO OCR adapter", () => {
 
   it("normalizes OCR grouping punctuation without changing decimals", () => {
     expect(normalizeOcrNumericSeparators(
-      "20,095.672,181.49 17.937.857.423 3,416,.652,099 0.34",
+      "20,095.672,181.49 17.937.857.423 3,416,.652,099 0.34 "
+        + "6,896,205,555 83 | 6,371,577,00631",
     )).toBe(
-      "20,095,672,181.49 17,937,857,423 3,416,652,099 0.34",
+      "20,095,672,181.49 17,937,857,423 3,416,652,099 0.34 "
+        + "6,896,205,555.83 | 6,371,577,006.31",
     );
   });
 
@@ -192,6 +209,108 @@ describe("CNINFO OCR adapter", () => {
     expect(renderPage).toHaveBeenCalledTimes(6);
     expect(recognize).toHaveBeenCalledTimes(12);
     expect(terminate).toHaveBeenCalledOnce();
+  });
+
+  it("recovers a securities income statement from complementary OCR modes", async () => {
+    const recognize = vi.fn(async (
+      _image: Uint8Array,
+      mode?: "layout" | "single-block",
+    ) => mode === "single-block"
+      ? {
+          text: [
+            "《 麒 伟 孝 合 并 利 涧 表",
+            "2024 年 1-6 月",
+            "会 证 0 表",
+            "编 制 单 位 : 国 信 证 券 股 份 有 限 公 司 单 位 ; 人 民 币 元",
+            "m e | 一 一",
+            "E e 一 7, 757, 496,967.11 8,207,714 090.75",
+            "手 续 费 及 佣 金 浑 收 入 3,035,882,852.74 3,302,035,744.97",
+            "二 、 萍 业 怡 支 出 4,543,286,806.85 4,339,034,107.98",
+            "1 归 属 于 母 公 司 所 有 者 的 浑 利 涕 3 138 731 142.10 3 589,563,661.48",
+          ].join("\n"),
+        }
+      : {
+          blocks: blocks(
+            line(800, 100, "会 证 0 表"),
+            line(800, 140, "本 期 数 上 年 同 期 数"),
+            line(1050, 180, "7, 757, 496,967.11 8,207,714 090.75"),
+            line(250, 220, "手 续 费 及 佣 金 浑 收 入"),
+            line(250, 260, "二 、 萍 业 怡 支 出"),
+          ),
+        });
+    const extractor = createCninfoOcrTextExtractor({
+      pageNumbers: [1],
+      extractTextImplementation: async () => [""],
+      renderPageImplementation: async () => new Uint8Array([1]),
+      createRecognizerImplementation: async () => ({
+        engine: "fake-ocr",
+        version: "1.2.3",
+        language: "chi_sim",
+        recognize,
+        terminate: async () => undefined,
+      }),
+    });
+
+    const result = await extractor(new Uint8Array([1, 2, 3]));
+    expect(Array.isArray(result)).toBe(false);
+    if (Array.isArray(result)) throw new Error("Expected structured result");
+    expect(extractFinancialColumns(result.pages, {
+      fiscalYear: 2024,
+      fiscalQuarter: 2,
+      presentation: "ytd",
+    })).toMatchObject({
+      current: {
+        "income.revenue": "7757496967.11",
+        "income.netProfitParent": "3138731142.10",
+      },
+    });
+    expect(recognize).toHaveBeenCalledTimes(2);
+  });
+
+  it("recovers a combined securities statement from contextual OCR errors", () => {
+    const text = reconstructOcrPage(blocks(
+      line(250, 100, "仕 芥 及 母 公 司 利 润 表"),
+      line(250, 140, "单 位 : 人 民 币 元"),
+      line(250, 180, "项 目 附 注 本 期 金 额 上 朝 入 颜"),
+      line(800, 220, "骰 并 | 御 公 司 E 吊 公 司 E 古 公 司"),
+      line(250, 260, "一 : 莲 丐 8 政 入"),
+      line(900, 260, "2,855,003,783.80 2,480,994,198.30 831,658,317.39 3,008,106,039.00"),
+      line(250, 300, "归 厨 于 公 司 阮 东 的 浑 利 湘"),
+      line(900, 300, "786,782 176.62 1,106,074,769.62"),
+    ));
+
+    expect(extractFinancialColumns([text], {
+      fiscalYear: 2024,
+      fiscalQuarter: 2,
+      presentation: "ytd",
+    })).toMatchObject({
+      current: {
+        "income.revenue": "2855003783.80",
+        "income.netProfitParent": "786782176.62",
+      },
+    });
+  });
+
+  it("recovers annual values with lost decimal separators", () => {
+    const text = reconstructOcrPage(blocks(
+      line(250, 100, "合 并 利 润 表"),
+      line(250, 140, "单 位 : 人 民 币 元"),
+      line(250, 180, "附 注 本 期 金 额 上 期 金 额"),
+      line(250, 220, "一 、 营 业 收 入"),
+      line(900, 220, "6,896,205,555 83 | 6,371,577,00631"),
+      line(250, 260, "归 属 于 母 公 司 股 东 的 净 利 济"),
+      line(900, 260, "1,548,231,441.85 | 1,509,258,438.82"),
+    ));
+
+    expect(extractFinancialColumns([text], {
+      fiscalYear: 2023,
+      presentation: "annual",
+    })).toMatchObject({
+      current: {
+        "income.revenue": "6896205555.83",
+        "income.netProfitParent": "1548231441.85",
+      },
+    });
   });
 
   it("reuses content-addressed OCR results across extractor instances", async () => {

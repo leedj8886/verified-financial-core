@@ -17,7 +17,7 @@ const DEFAULT_SCALE = 3;
 const DEFAULT_MINIMUM_BLANK_RUN_PAGES = 6;
 const DEFAULT_MAXIMUM_OCR_PAGES = 24;
 const DEFAULT_CACHE_IDENTITY = "tesseract.js@7.0.0:chi_sim";
-const OCR_CACHE_FORMAT = "verified-financial-cninfo-ocr-cache/v1";
+const OCR_CACHE_FORMAT = "verified-financial-cninfo-ocr-cache/v6";
 
 export interface OcrRecognition {
   text?: string;
@@ -102,6 +102,13 @@ function normalizeForDetection(value: string): string {
 function hasOnlyLowInformationText(value: string): boolean {
   const compact = normalizeForDetection(value);
   if (compact.length === 0) return true;
+  if (
+    compact.length <= 120
+    && /财务报表附注.*金额单位为?人民币(?:百万元|万元|千元|元)[）)]?\d{1,4}$/
+      .test(compact)
+  ) {
+    return true;
+  }
   if (
     /财务报表附注|审[计阅]报告|备查文件目录|第[八九十\d]+节财务报告/.test(
       compact,
@@ -244,7 +251,24 @@ function collectPositionedLines(blocks: unknown): PositionedLine[] {
 }
 
 export function normalizeOcrNumericSeparators(text: string): string {
-  return text.replace(/(?<=\d)[,.]{2,}(?=\d)/g, ",")
+  return text.replace(
+    /(\d{1,3}(?:,\d{3}){3})\s+(\d{2})(?=\s*[|‖]\s*\d{1,3}(?:,\d{3}){2,})/g,
+    "$1.$2",
+  )
+    .replace(
+      /(\d{1,3}(?:,\d{3}){2}),(\d{3})(\d{2})(?=\D|$)/g,
+      "$1,$2.$3",
+    )
+    .replace(/(?<=\d),\s+(?=\d{3}(?:\D|$))/g, ",")
+    .replace(
+      /(\d{1,3},\d{3})\s+(\d{3}\.\d{1,2})(?=\s+\d{1,3}(?:,\d{3})+)/g,
+      "$1,$2",
+    )
+    .replace(
+      /[+-]?\d{1,3}(?:(?:,|\s+)\d{3}){3,}(?:\.\d+)?/g,
+      (token) => token.replace(/\s+/g, ","),
+    )
+    .replace(/(?<=\d)[,.]{2,}(?=\d)/g, ",")
     .replace(/[+-]?\d+(?:[,.]\d+)+/g, (token) => {
     if (/^\d{4}[.-]\d{1,2}[.-]\d{1,2}$/.test(token)) return token;
     const sign = token.startsWith("-") || token.startsWith("+")
@@ -260,11 +284,26 @@ export function normalizeOcrNumericSeparators(text: string): string {
     });
 }
 
+function repairOcrSemanticText(text: string): string {
+  return text
+    .replace(
+      /仕\s*芥(?=\s*及\s*母\s*公\s*司\s*利\s*润\s*表)/g,
+      "合并",
+    )
+    .replace(/利\s*涧\s*表/g, "利润表")
+    .replace(
+      /归\s*[厨属]\s*于\s*(?:母\s*)?公\s*司\s*[阮股]\s*东\s*的\s*浑\s*利\s*[湘洵涧润涕]/g,
+      "归属于母公司股东的净利润",
+    )
+    .replace(/浑\s*利\s*[洵涧润涕]/g, "净利润")
+    .replace(/净\s*利\s*[洵涧济]/g, "净利润");
+}
+
 function restoreOcrIncomeStatementStructure(text: string): string {
-  let lines = text.split("\n");
+  let lines = repairOcrSemanticText(text).split("\n");
   const compactLines = lines.map(normalizeForDetection);
   const hasSemanticIncomeHeading = compactLines.some((line) =>
-    /^(?:合并|合并及公司|合并及母公司)利润表/.test(line)
+    /(?:合并|合并及公司|合并及母公司)利润表/.test(line)
   );
   const hasParserReadyIncomeHeading = lines.some((line) =>
     /^(?:合并|合并及公司|合并及母公司)利润表$/.test(line.trim())
@@ -275,7 +314,8 @@ function restoreOcrIncomeStatementStructure(text: string): string {
     && (hasSemanticIncomeHeading || /营业(?:总)?收入/.test(compact))
     && /归属于母公司(?:股东|所有者)的净(?:利润|亏损)/.test(compact)
   ) {
-    const combinedColumns = /合并.*公司.*公司/.test(compact.slice(0, 1200));
+    const combinedColumns = /合并及母公司利润表/.test(compact.slice(0, 1200))
+      || /合并.*公司.*公司/.test(compact.slice(0, 1200));
     lines = [combinedColumns ? "合并及公司利润表" : "合并利润表", ...lines];
   }
   const normalizedLines = lines.map(normalizeForDetection);
@@ -286,13 +326,27 @@ function restoreOcrIncomeStatementStructure(text: string): string {
     isIncomeStatement
     && !normalizedLines.some((line) => /营业(?:总)?收入/.test(line))
   ) {
+    const securitiesLayout = normalizedLines.some((line) =>
+        /手[续组]费及[佣偷感]金.{0,8}收入/.test(line)
+      )
+      && normalizedLines.some((line) => /[营萍]业.{0,2}支出/.test(line));
     const headerIndex = normalizedLines.findIndex((line) =>
-      /本[期朝].{0,3}金额.*上[期朝].{0,3}金额/.test(line)
+      /本[期朝].{0,3}(?:金额|数|金[甄颜]).*上(?:年同)?[期朝].{0,4}(?:金额|数|[入金][颜额])/
+        .test(line)
     );
-    if (headerIndex >= 0) {
+    const unitIndex = normalizedLines.findIndex((line) =>
+      /人民币(?:百万元|万元|千元|元)/.test(line)
+    );
+    const tableStartIndex = headerIndex >= 0
+      ? headerIndex
+      : securitiesLayout
+        ? unitIndex
+        : -1;
+    if (tableStartIndex >= 0) {
       const valueIndex = lines.findIndex((line, index) =>
-        index > headerIndex
+        index > tableStartIndex
         && (line.match(/[+-]?\d[\d,.]*\d/g)?.length ?? 0) >= 2
+        && /\d(?:[,.]\d{3}){2,}/.test(line)
       );
       if (valueIndex >= 0) {
         lines[valueIndex] = `一、营业收入 ${lines[valueIndex]}`;
@@ -312,6 +366,15 @@ function looksLikeConsolidatedIncomeStatement(text: string): boolean {
   const compact = normalizeForDetection(text);
   return /营业(?:总)?收入/.test(compact)
     && /归属于母公司(?:股东|所有者)的净(?:利润|亏损)/.test(compact);
+}
+
+function looksLikePotentialIncomeStatement(text: string): boolean {
+  const compact = normalizeForDetection(text);
+  const substantiveRows = /[营萍]业.{0,2}支出/.test(compact)
+    && /手[续组]费及[佣偷感]金.{0,8}收入/.test(compact);
+  return substantiveRows
+    || /(?:利润表|会证0?[2Z]?表)/.test(compact)
+      && /(?:[营萍]业.{0,2}支出|归属于母公司)/.test(compact);
 }
 
 export function reconstructOcrPage(blocks: unknown): string {
@@ -643,19 +706,34 @@ export function createCninfoOcrTextExtractor(
             let text = reconstructed.length > 0
               ? reconstructed
               : normalizeOcrNumericSeparators(recognition.text?.trim() ?? "");
+            const parserReady = looksLikeConsolidatedIncomeStatement(text);
             if (
-              looksLikeConsolidatedIncomeStatement(text)
-              && statementUnit(text) === undefined
+              (parserReady && statementUnit(text) === undefined)
+              || (!parserReady && looksLikePotentialIncomeStatement(text))
             ) {
               const supplemental = await recognizer.recognize(
                 image,
                 "single-block",
               );
-              const unit = statementUnit(supplemental.text ?? "");
+              const supplementalText = restoreOcrIncomeStatementStructure(
+                normalizeOcrNumericSeparators(
+                  supplemental.text?.trim() ?? "",
+                ),
+              );
+              if (
+                !parserReady
+                && looksLikeConsolidatedIncomeStatement(supplementalText)
+              ) {
+                text = supplementalText;
+              }
+              const unit = statementUnit(supplementalText);
               if (unit !== undefined) {
                 text = `金额单位为人民币${unit}\n${text}`;
               }
             }
+            text = restoreOcrIncomeStatementStructure(
+              normalizeOcrNumericSeparators(text),
+            );
             if (text.length === 0) continue;
             recognizedPages.push({ pageNumber, text });
           }
