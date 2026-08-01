@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { createCanvas, loadImage } from "@napi-rs/canvas";
 import chiSim from "@tesseract.js-data/chi_sim";
 import type {
   PdfTextExtractionResult,
@@ -17,7 +18,7 @@ const DEFAULT_SCALE = 3;
 const DEFAULT_MINIMUM_BLANK_RUN_PAGES = 6;
 const DEFAULT_MAXIMUM_OCR_PAGES = 24;
 const DEFAULT_CACHE_IDENTITY = "tesseract.js@7.0.0:chi_sim";
-const OCR_CACHE_FORMAT = "verified-financial-cninfo-ocr-cache/v6";
+const OCR_CACHE_FORMAT = "verified-financial-cninfo-ocr-cache/v11";
 
 export interface OcrRecognition {
   text?: string;
@@ -30,7 +31,7 @@ export interface OcrRecognizer {
   language: string;
   recognize(
     image: Uint8Array,
-    mode?: "layout" | "single-block",
+    mode?: "layout" | "single-block" | "sparse-text",
   ): Promise<OcrRecognition>;
   terminate(): Promise<void>;
 }
@@ -56,6 +57,9 @@ export interface CninfoOcrTextExtractorOptions {
   extractTextImplementation?: PdfTextExtractor;
   renderPageImplementation?: RenderPageImplementation;
   createRecognizerImplementation?: () => Promise<OcrRecognizer>;
+  cropHeaderImplementation?: (
+    image: Uint8Array,
+  ) => Promise<Uint8Array>;
 }
 
 interface CachedOcrPage {
@@ -315,8 +319,24 @@ function restoreOcrIncomeStatementStructure(text: string): string {
     && /归属于母公司(?:股东|所有者)的净(?:利润|亏损)/.test(compact)
   ) {
     const combinedColumns = /合并及母公司利润表/.test(compact.slice(0, 1200))
-      || /合并.*公司.*公司/.test(compact.slice(0, 1200));
+      || /合并.*公司.*公司/.test(compact.slice(0, 1200))
+      || (
+        /合并公司/.test(compact.slice(0, 1200))
+        && (compact.slice(0, 1200).match(/\d{4}年度/g)?.length ?? 0) >= 4
+      );
     lines = [combinedColumns ? "合并及公司利润表" : "合并利润表", ...lines];
+  }
+  const headerContext = compact.slice(0, 1200);
+  const combinedColumns = /合并.*公司.*公司/.test(headerContext)
+    || (
+      /合并公司/.test(headerContext)
+      && (headerContext.match(/\d{4}年度/g)?.length ?? 0) >= 4
+    );
+  if (hasParserReadyIncomeHeading && combinedColumns) {
+    const headingIndex = lines.findIndex((line) =>
+      /^合并利润表$/.test(line.trim())
+    );
+    if (headingIndex >= 0) lines[headingIndex] = "合并及公司利润表";
   }
   const normalizedLines = lines.map(normalizeForDetection);
   const isIncomeStatement = normalizedLines.some((line) =>
@@ -357,9 +377,20 @@ function restoreOcrIncomeStatementStructure(text: string): string {
 }
 
 function statementUnit(text: string): string | undefined {
-  const compact = normalizeForDetection(text);
-  if (/人民币(?:百万元|[刊白自]万元)/.test(compact)) return "百万元";
+  const compact = normalizeForDetection(text.slice(0, 1200));
+  if (/人民币(?:百万元|.{0,2}[刊白自]万元)/.test(compact)) return "百万元";
   return /人民币(万元|千元|元)/.exec(compact)?.[1];
+}
+
+function attachStatementUnit(text: string, unit: string): string {
+  const lines = text.split("\n");
+  const headingIndex = lines.findIndex((line) =>
+    /^(?:合并|合并及公司|合并及母公司)利润表$/.test(line.trim())
+  );
+  const unitLine = `金额单位为人民币${unit}`;
+  if (headingIndex < 0) return `${unitLine}\n${text}`;
+  lines.splice(headingIndex + 1, 0, unitLine);
+  return lines.join("\n");
 }
 
 function looksLikeConsolidatedIncomeStatement(text: string): boolean {
@@ -451,6 +482,30 @@ async function renderPdfPage(
   return new Uint8Array(rendered);
 }
 
+async function cropStatementHeader(
+  image: Uint8Array,
+): Promise<Uint8Array> {
+  const decoded = await loadImage(Buffer.from(image));
+  const sourceHeight = Math.max(1, Math.round(decoded.height * 0.32));
+  const ratio = 0.7;
+  const canvas = createCanvas(
+    Math.max(1, Math.round(decoded.width * ratio)),
+    Math.max(1, Math.round(sourceHeight * ratio)),
+  );
+  canvas.getContext("2d").drawImage(
+    decoded,
+    0,
+    0,
+    decoded.width,
+    sourceHeight,
+    0,
+    0,
+    canvas.width,
+    canvas.height,
+  );
+  return new Uint8Array(canvas.toBuffer("image/png"));
+}
+
 async function createTesseractRecognizer(): Promise<OcrRecognizer> {
   const worker = await createWorker("chi_sim", undefined, {
     langPath: chiSim.langPath,
@@ -466,7 +521,9 @@ async function createTesseractRecognizer(): Promise<OcrRecognizer> {
       await worker.setParameters({
         tessedit_pageseg_mode: mode === "single-block"
           ? PSM.SINGLE_BLOCK
-          : PSM.AUTO,
+          : mode === "sparse-text"
+            ? PSM.SPARSE_TEXT
+            : PSM.AUTO,
       });
       const result = await worker.recognize(
         Buffer.from(image),
@@ -650,6 +707,7 @@ export function createCninfoOcrTextExtractor(
   const renderPage = options.renderPageImplementation ?? renderPdfPage;
   const createRecognizer = options.createRecognizerImplementation
     ?? createTesseractRecognizer;
+  const cropHeader = options.cropHeaderImplementation ?? cropStatementHeader;
   const scale = options.scale ?? DEFAULT_SCALE;
   const maximum = options.maximumOcrPages ?? DEFAULT_MAXIMUM_OCR_PAGES;
   const cacheIdentity = options.cacheIdentity
@@ -726,9 +784,34 @@ export function createCninfoOcrTextExtractor(
               ) {
                 text = supplementalText;
               }
-              const unit = statementUnit(supplementalText);
+              let unit = statementUnit(supplementalText);
+              if (unit === undefined && parserReady) {
+                try {
+                  const headerImage = await cropHeader(image);
+                  const headerRecognition = await recognizer.recognize(
+                    headerImage,
+                    "single-block",
+                  );
+                  const headerText = normalizeOcrNumericSeparators(
+                    headerRecognition.text?.trim() ?? "",
+                  );
+                  unit = statementUnit(headerText);
+                  if (unit === undefined) {
+                    const sparseRecognition = await recognizer.recognize(
+                      headerImage,
+                      "sparse-text",
+                    );
+                    unit = statementUnit(normalizeOcrNumericSeparators(
+                      sparseRecognition.text?.trim() ?? "",
+                    ));
+                  }
+                } catch {
+                  // Unit recovery is best effort; unresolved units remain
+                  // unscaled and are expected to fail source verification.
+                }
+              }
               if (unit !== undefined) {
-                text = `金额单位为人民币${unit}\n${text}`;
+                text = attachStatementUnit(text, unit);
               }
             }
             text = restoreOcrIncomeStatementStructure(

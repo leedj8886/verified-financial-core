@@ -172,6 +172,9 @@ export function verifyAndMaterializeFact(
     unit: chosen.unit,
     period: chosen.period,
     basis: chosen.basis,
+    ...(chosen.reportingVersion === undefined
+      ? {}
+      : { reportingVersion: chosen.reportingVersion }),
     status: verification.status,
     usable: verification.usable,
     reasonCodes: verification.reasonCodes,

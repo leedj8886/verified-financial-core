@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import {
   fetchBytes,
+  providerKnowledgeAsOf,
   ProviderFailure,
   type FetchImplementation,
   type ProviderBatch,
@@ -26,7 +27,7 @@ import { extractText, getDocumentProxy } from "unpdf";
 
 const PROVIDER_ID = "hkex-direct";
 const UPSTREAM_SOURCE_ID = "hkex";
-const MAPPING_VERSION = "hkex@1.2.0";
+const MAPPING_VERSION = "hkex@1.3.0";
 const BASE_URL = "https://www1.hkexnews.hk/";
 const USER_AGENT =
   "verified-financial-core/0.1 (+https://github.com/leedj8886/verified-financial-core)";
@@ -867,7 +868,8 @@ function isFullFiling(
     && stockCodes.includes(request.instrument.symbol)
     && title.includes(String(query.fiscalYear))
     && !/SUPPLEMENT|CLARIFICATION|NOTICE|NOTIFICATION|CANCEL/.test(title)
-    && Date.parse(publishedAt(filing.dateTime)) <= Date.parse(request.asOf);
+    && Date.parse(publishedAt(filing.dateTime))
+      <= Date.parse(providerKnowledgeAsOf(request));
 }
 
 async function defaultExtractText(
@@ -974,7 +976,7 @@ export class HkexProvider implements SourceProvider {
         stockId: String(stockId),
         documentType: "-1",
         fromDate: `${query.fiscalYear}0101`,
-        toDate: compactDate(hongKongDate(request.asOf)),
+        toDate: compactDate(hongKongDate(providerKnowledgeAsOf(request))),
         title,
         searchType: "0",
         t1code: "-2",
@@ -1050,7 +1052,9 @@ export class HkexProvider implements SourceProvider {
     context: ProviderContext,
   ): Promise<{ filings: Filing[]; snapshot: StoredSnapshotRef }> {
     const requestedYears = requestedDividendYears(request.requirements);
-    const asOfYear = Number(hongKongDate(request.asOf).slice(0, 4));
+    const asOfYear = Number(
+      hongKongDate(providerKnowledgeAsOf(request)).slice(0, 4),
+    );
     const fromYear = requestedYears === undefined
       ? Math.max(1990, asOfYear - 10)
       : Math.min(...requestedYears);
@@ -1064,7 +1068,7 @@ export class HkexProvider implements SourceProvider {
         stockId: String(stockId),
         documentType: "-1",
         fromDate: `${fromYear}0101`,
-        toDate: compactDate(hongKongDate(request.asOf)),
+        toDate: compactDate(hongKongDate(providerKnowledgeAsOf(request))),
         title: "dividend",
         searchType: "0",
         t1code: "-2",
@@ -1102,7 +1106,8 @@ export class HkexProvider implements SourceProvider {
         && !/SUPPLEMENT|CLARIFICATION|NOTICE|NOTIFICATION|CANCEL/.test(
           filing.title.toUpperCase(),
         )
-        && Date.parse(publishedAt(filing.dateTime)) <= Date.parse(request.asOf)
+        && Date.parse(publishedAt(filing.dateTime))
+          <= Date.parse(providerKnowledgeAsOf(request))
         && (
           requestedYears === undefined
           || [...requestedYears].some((year) =>
@@ -1420,7 +1425,8 @@ export class HkexProvider implements SourceProvider {
             providerId: this.providerId,
             code: "EMPTY_RESPONSE",
             message:
-              `HKEX has no ${query.reportLabel} available as of ${request.asOf}`,
+              `HKEX has no ${query.reportLabel} available as of `
+              + providerKnowledgeAsOf(request),
             retryable: false,
           });
           continue;

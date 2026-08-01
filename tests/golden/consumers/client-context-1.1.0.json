@@ -1,0 +1,92 @@
+{
+  "contextVersion": "1.1.0",
+  "factSet": {
+    "factSetId": "fs:contract-v1.1",
+    "schemaVersion": "1.1.0",
+    "generatedAt": "2026-07-29T10:00:00+08:00",
+    "asOf": "2026-04-18T23:59:59+08:00",
+    "knowledgeAsOf": "2026-04-18T23:59:59+08:00",
+    "temporalMode": "point-in-time"
+  },
+  "company": {
+    "companyId": "company:XSHG:600519",
+    "legalName": "贵州茅台",
+    "jurisdiction": "CN"
+  },
+  "instruments": [
+    {
+      "instrumentId": "XSHG:600519",
+      "exchangeMic": "XSHG",
+      "symbol": "600519",
+      "shareClass": "A",
+      "tradingCurrency": "CNY"
+    }
+  ],
+  "gate": {
+    "minimumStatus": "verified",
+    "actualStatus": "verified",
+    "passed": true
+  },
+  "acceptedFacts": [
+    {
+      "factId": "fact:revenue-2025",
+      "concept": "income.revenue",
+      "periodLabel": "2025FY",
+      "period": {
+        "kind": "duration",
+        "startDate": "2025-01-01",
+        "endDate": "2025-12-31",
+        "fiscalYear": 2025,
+        "presentation": "annual"
+      },
+      "unit": "CNY",
+      "currency": "CNY",
+      "status": "verified",
+      "usable": true,
+      "sourceIds": [
+        "cninfo",
+        "eastmoney"
+      ],
+      "reasonCodes": [],
+      "observationIds": [
+        "obs:cninfo-revenue-2025",
+        "obs:eastmoney-revenue-2025"
+      ],
+      "reportingVersion": {
+        "kind": "original-filing",
+        "sourcePeriodEndDate": "2025-12-31"
+      },
+      "temporalEvidence": {
+        "factId": "fact:revenue-2025",
+        "evidenceAvailableAt": "2026-04-17T23:59:59+08:00",
+        "knownAtEffectiveAsOf": true,
+        "postEffectiveDateObservationIds": []
+      },
+      "disposition": "accepted",
+      "value": "172054171890.91"
+    }
+  ],
+  "blockedFacts": [],
+  "issues": [],
+  "audit": {
+    "rawSnapshotIds": [
+      "sha256:cninfo-contract-fixture",
+      "sha256:eastmoney-contract-fixture"
+    ],
+    "lineageVersions": {
+      "conceptRegistryVersion": "1.0.0",
+      "validationRulesVersion": "1.10.0",
+      "mappingVersions": [
+        "cninfo@1.11.0",
+        "eastmoney@1.5.0"
+      ],
+      "formulaVersions": {
+        "fcf.ocf-minus-capex.v1": "1.0.0",
+        "market-cap.price-times-shares.v1": "1.0.0",
+        "pe.price-divided-by-eps.v1": "1.0.0",
+        "roe.average-equity.v1": "1.0.0",
+        "ttm.flow.v1": "1.0.0"
+      }
+    }
+  }
+}

@@ -87,15 +87,18 @@ const provider: SourceProvider = {
 
 describe("provider contract", () => {
   it("accepts a complete provider request and batch", () => {
-    expect(ProviderRequestSchema.parse({
+    const request = ProviderRequestSchema.parse({
       instrument,
       requirements: [{
         conceptId: "income.revenue",
         required: true,
       }],
       asOf: "2026-07-27T23:59:59+08:00",
+      knowledgeAsOf: "2026-07-28T23:59:59+08:00",
       offline: false,
-    }).instrument.instrumentId).toBe("XSHG:600519");
+    });
+    expect(request.instrument.instrumentId).toBe("XSHG:600519");
+    expect(request.knowledgeAsOf).toBe("2026-07-28T23:59:59+08:00");
     expect(parseProviderBatch(provider, batch).observations).toHaveLength(1);
   });
 

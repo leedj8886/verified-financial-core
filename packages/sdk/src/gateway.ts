@@ -21,10 +21,10 @@ import {
   type CanonicalFact,
   type FactRequirement,
   type FactRequest,
+  type FactSetTemporalContext,
   type Instrument,
   type Observation,
   type VerifiedFactSet,
-  type VerifiedFactSetSchemaVersion,
 } from "@verified-financial/schema";
 import {
   type CachedFactSet,
@@ -42,7 +42,7 @@ import {
   materializeRequestedFacts,
 } from "./derivation-orchestrator.js";
 
-const DEFAULT_VALIDATION_RULES_VERSION = "1.9.0";
+const DEFAULT_VALIDATION_RULES_VERSION = "1.10.0";
 const PROVIDER_MAPPING_REASON_CODES = new Set([
   "STATEMENT_NOT_FOUND",
   "STATEMENT_IMAGE_ONLY",
@@ -72,7 +72,7 @@ export interface FinancialGatewayOptions {
   resolver?: InstrumentResolver;
   now?: () => string;
   providerTimeoutMs?: number;
-  schemaVersion?: VerifiedFactSetSchemaVersion;
+  schemaVersion?: typeof VERIFIED_FACT_SET_SCHEMA_VERSION;
   validationRulesVersion?: string;
 }
 
@@ -268,7 +268,7 @@ function cacheAgeSeconds(cached: CachedFactSet, now: string): number {
 function requestCacheKey(
   resolution: InstrumentResolution,
   request: FactRequest,
-  schemaVersion: VerifiedFactSetSchemaVersion,
+  schemaVersion: typeof VERIFIED_FACT_SET_SCHEMA_VERSION,
   validationRulesVersion: string,
 ): string {
   return stableId("request", {
@@ -279,7 +279,61 @@ function requestCacheKey(
       canonicalJson(left).localeCompare(canonicalJson(right))
     ),
     asOf: request.asOf,
+    knowledgeAsOf: request.knowledgeAsOf ?? request.asOf,
   });
+}
+
+function requestKnowledgeAsOf(
+  request: Pick<FactRequest, "asOf" | "knowledgeAsOf">,
+): string {
+  return request.knowledgeAsOf ?? request.asOf;
+}
+
+function buildTemporalContext(
+  request: FactRequest,
+  facts: readonly CanonicalFact[],
+  observations: readonly Observation[],
+): FactSetTemporalContext {
+  const effectiveAsOf = request.asOf;
+  const knowledgeAsOf = requestKnowledgeAsOf(request);
+  const observationsById = new Map(
+    observations.map((observation) => [observation.observationId, observation]),
+  );
+  return {
+    effectiveAsOf,
+    knowledgeAsOf,
+    mode: Date.parse(knowledgeAsOf) === Date.parse(effectiveAsOf)
+      ? "point-in-time"
+      : "post-disclosure",
+    facts: [...facts]
+      .sort((left, right) => left.factId.localeCompare(right.factId))
+      .map((fact) => {
+        const evidence = fact.observationIds
+          .map((observationId) => observationsById.get(observationId))
+          .filter((observation): observation is Observation =>
+            observation?.availability.publishedAt !== undefined
+          );
+        const evidenceAvailableAt = evidence
+          .map((observation) => observation.availability.publishedAt!)
+          .sort((left, right) => Date.parse(right) - Date.parse(left))[0];
+        if (evidenceAvailableAt === undefined) {
+          throw new Error(`FACT_TEMPORAL_EVIDENCE_MISSING:${fact.factId}`);
+        }
+        const postEffectiveDateObservationIds = evidence
+          .filter((observation) =>
+            Date.parse(observation.availability.publishedAt!)
+              > Date.parse(effectiveAsOf)
+          )
+          .map((observation) => observation.observationId)
+          .sort();
+        return {
+          factId: fact.factId,
+          evidenceAvailableAt,
+          knownAtEffectiveAsOf: postEffectiveDateObservationIds.length === 0,
+          postEffectiveDateObservationIds,
+        };
+      }),
+  };
 }
 
 function matchesRequest(
@@ -297,6 +351,10 @@ function matchesRequest(
 }
 
 function compatibilityGroupKey(observation: Observation): string {
+  const reportingVersion = observation.reportingVersion ?? {
+    kind: "original-filing" as const,
+    sourcePeriodEndDate: observation.period.endDate,
+  };
   return canonicalJson({
     companyId: observation.companyId,
     instrumentId: observation.instrumentId,
@@ -304,6 +362,7 @@ function compatibilityGroupKey(observation: Observation): string {
     unit: observation.unit,
     period: observation.period,
     basis: observation.basis,
+    reportingVersion,
   });
 }
 
@@ -386,7 +445,7 @@ export class FinancialGateway {
   readonly resolver: InstrumentResolver;
   private readonly now: () => string;
   private readonly providerTimeoutMs: number;
-  private readonly schemaVersion: VerifiedFactSetSchemaVersion;
+  private readonly schemaVersion: typeof VERIFIED_FACT_SET_SCHEMA_VERSION;
   private readonly validationRulesVersion: string;
 
   constructor(options: FinancialGatewayOptions) {
@@ -525,12 +584,13 @@ export class FinancialGateway {
       observation.instrumentId === undefined
       || observation.instrumentId === resolution.instrument.instrumentId
     );
+    const knowledgeAsOf = requestKnowledgeAsOf(request);
     const eligibleObservations = allObservations.filter((observation) =>
-      isAvailableAsOf(observation.availability, request.asOf)
+      isAvailableAsOf(observation.availability, knowledgeAsOf)
     );
     const unavailableReasons = allObservations
       .filter((observation) =>
-        !isAvailableAsOf(observation.availability, request.asOf)
+        !isAvailableAsOf(observation.availability, knowledgeAsOf)
       )
       .map(unavailableReason);
     const groups = new Map<string, Observation[]>();
@@ -559,7 +619,7 @@ export class FinancialGateway {
       : ["PROVIDER_COMPANY_IDENTITY_CONFLICT"];
     const reasonCodes = [
       ...issues.map(providerReason),
-      ...providerInputReasons(outcomes, materialized.reasonCodes, request.asOf),
+      ...providerInputReasons(outcomes, materialized.reasonCodes, knowledgeAsOf),
       ...unmappedInputReasons(sameCompanyBatches),
       ...unavailableReasons,
       ...instrumentScopeReasons,
@@ -570,11 +630,14 @@ export class FinancialGateway {
     const mappingVersions = batches.flatMap(
       (batch) => batch.mappingVersions,
     );
-    const observations = eligibleObservations.filter(
-      (observation) => observation.companyId === company.companyId,
-    );
     const lineageFacts = materialized.lineageFacts.filter((fact) =>
       fact.companyId === company.companyId
+    );
+    const companyFacts = facts.filter((fact) =>
+      fact.companyId === company.companyId
+    );
+    const companyObservations = eligibleObservations.filter(
+      (observation) => observation.companyId === company.companyId,
     );
     return {
       factSet: buildFactSet({
@@ -583,7 +646,7 @@ export class FinancialGateway {
         generatedAt: startedAt,
         company,
         instruments: mergeInstruments(resolution, sameCompanyBatches, company),
-        facts: facts.filter((fact) => fact.companyId === company.companyId),
+        facts: companyFacts,
         unmapped: sameCompanyBatches.flatMap((batch) => batch.unmapped),
         validations: validations.filter((validation) =>
           facts.some((fact) =>
@@ -597,10 +660,15 @@ export class FinancialGateway {
         ),
         mappingVersions,
         validationRulesVersion: this.validationRulesVersion,
+        temporalContext: buildTemporalContext(
+          request,
+          companyFacts,
+          companyObservations,
+        ),
         reasonCodes,
       }),
       lineageFacts,
-      observations,
+      observations: companyObservations,
       mappingVersions,
     };
   }
@@ -655,6 +723,12 @@ export class FinancialGateway {
       rawSnapshotIds: cached.factSet.rawSnapshotIds,
       mappingVersions: cached.mappingVersions,
       validationRulesVersion: this.validationRulesVersion,
+      temporalContext: cached.factSet.temporalContext
+        ?? buildTemporalContext(
+          request,
+          cached.factSet.facts,
+          cached.observations,
+        ),
       reasonCodes: [
         ...cached.factSet.reasonCodes,
         ...additionalReasonCodes,
@@ -672,7 +746,11 @@ export class FinancialGateway {
   async getFacts(input: FactRequest): Promise<VerifiedFactSet> {
     let request: FactRequest;
     try {
-      request = FactRequestSchema.parse(input);
+      const parsed = FactRequestSchema.parse(input);
+      request = {
+        ...parsed,
+        knowledgeAsOf: parsed.knowledgeAsOf ?? parsed.asOf,
+      };
     } catch (error) {
       throw new GatewayError("INVALID_INPUT", "Invalid FactRequest", {
         cause: error,
@@ -737,6 +815,7 @@ export class FinancialGateway {
             instrument: resolution.instrument,
             requirements,
             asOf: request.asOf,
+            knowledgeAsOf: requestKnowledgeAsOf(request),
             offline: false,
           });
           return this.fetchProvider(provider, providerRequest, startedAt);
@@ -815,7 +894,7 @@ export class FinancialGateway {
   }
 
   doctor(): {
-    schemaVersion: VerifiedFactSetSchemaVersion;
+    schemaVersion: typeof VERIFIED_FACT_SET_SCHEMA_VERSION;
     validationRulesVersion: string;
     providers: {
       providerId: string;

@@ -1,6 +1,7 @@
 import { createCipheriv, createHash } from "node:crypto";
 import {
   fetchBytes,
+  providerKnowledgeAsOf,
   ProviderFailure,
   type FetchImplementation,
   type ProviderBatch,
@@ -26,7 +27,7 @@ import { extractText, getDocumentProxy } from "unpdf";
 
 const PROVIDER_ID = "cninfo-direct";
 const UPSTREAM_SOURCE_ID = "cninfo";
-const MAPPING_VERSION = "cninfo@1.9.0";
+const MAPPING_VERSION = "cninfo@1.11.0";
 const API_BASE = "https://www.cninfo.com.cn/new/";
 const WEBAPI_BASE = "https://webapi.cninfo.com.cn/";
 const PDF_BASE = "https://static.cninfo.com.cn/";
@@ -93,6 +94,7 @@ interface FilingQuery {
   category: string;
   reportLabel: string;
   requirements: FactRequirement[];
+  revisionEvidenceOnly?: boolean;
 }
 
 export interface PdfOcrMetadata {
@@ -601,12 +603,14 @@ function parseShareChanges(value: unknown): ShareChange[] {
 function selectPointInTimeShares(
   changes: readonly ShareChange[],
   asOf: string,
+  knowledgeAsOf: string,
 ): ShareChange | undefined {
   const targetDate = chinaDate(asOf);
+  const knowledgeDate = chinaDate(knowledgeAsOf);
   return changes
     .filter((change) =>
       change.effectiveDate <= targetDate
-      && change.disclosureDate <= targetDate
+      && change.disclosureDate <= knowledgeDate
     )
     .sort((left, right) =>
       right.effectiveDate.localeCompare(left.effectiveDate)
@@ -667,20 +671,77 @@ function reportQuery(
   };
 }
 
+function filingQueryKey(
+  query: Omit<FilingQuery, "requirements" | "revisionEvidenceOnly">,
+): string {
+  return JSON.stringify({
+    fiscalYear: query.fiscalYear,
+    ...(query.fiscalQuarter === undefined
+      ? {}
+      : { fiscalQuarter: query.fiscalQuarter }),
+    presentation: query.presentation,
+    category: query.category,
+    reportLabel: query.reportLabel,
+  });
+}
+
+function queryEndDate(query: Pick<
+  FilingQuery,
+  "fiscalYear" | "fiscalQuarter" | "presentation"
+>): string {
+  const monthDay = query.presentation === "annual"
+    ? "12-31"
+    : {
+        1: "03-31",
+        2: "06-30",
+        3: "09-30",
+        4: "12-31",
+      }[query.fiscalQuarter!];
+  return `${query.fiscalYear}-${monthDay}`;
+}
+
+function successorRevisionQuery(
+  query: FilingQuery,
+): Omit<FilingQuery, "requirements"> {
+  const fiscalYear = query.fiscalYear + 1;
+  return {
+    fiscalYear,
+    ...(query.fiscalQuarter === undefined
+      ? {}
+      : { fiscalQuarter: query.fiscalQuarter }),
+    presentation: query.presentation,
+    category: query.category,
+    reportLabel: query.reportLabel.replace(
+      String(query.fiscalYear),
+      String(fiscalYear),
+    ),
+    revisionEvidenceOnly: true,
+  };
+}
+
 function groupRequirements(
   requirements: readonly FactRequirement[],
+  knowledgeAsOf: string,
 ): FilingQuery[] {
   const groups = new Map<string, FilingQuery>();
   for (const requirement of requirements) {
     if (!definitionsByConcept.has(requirement.conceptId)) continue;
     const query = reportQuery(requirement);
     if (query === undefined) continue;
-    const key = JSON.stringify(query);
+    const key = filingQueryKey(query);
     const group = groups.get(key);
     if (group === undefined) {
       groups.set(key, { ...query, requirements: [requirement] });
     } else {
       group.requirements.push(requirement);
+    }
+  }
+  for (const query of [...groups.values()]) {
+    const successor = successorRevisionQuery(query);
+    if (queryEndDate(successor) > chinaDate(knowledgeAsOf)) continue;
+    const key = filingQueryKey(successor);
+    if (!groups.has(key)) {
+      groups.set(key, { ...successor, requirements: [] });
     }
   }
   return [...groups.values()].sort((left, right) =>
@@ -904,14 +965,36 @@ function financialValueTokens(
   line: string,
   tokens: RegExpMatchArray[],
   financialColumnCount: 2 | 4,
+  scale: string,
 ): RegExpMatchArray[] {
   if (financialColumnCount === 4) {
-    if (tokens.length >= financialColumnCount) {
-      return tokens.slice(-financialColumnCount, -financialColumnCount + 2);
+    const expanded = scale === "1"
+      ? tokens
+      : tokens.flatMap((token) => {
+          const merged = token[0].match(/^\d{1,3}(?:,\d{3}){3,}$/);
+          const groups = merged === null
+            ? undefined
+            : merged[0].split(",");
+          if (groups === undefined || groups.length % 2 !== 0) return [token];
+          const middle = groups.length / 2;
+          return [groups.slice(0, middle), groups.slice(middle)].map(
+            (part) => {
+              const split = [part.join(",")] as unknown as RegExpMatchArray;
+              if (token.index !== undefined) split.index = token.index;
+              if (token.input !== undefined) split.input = token.input;
+              return split;
+            },
+          );
+        });
+    if (expanded.length >= financialColumnCount) {
+      return expanded.slice(
+        -financialColumnCount,
+        -financialColumnCount + 2,
+      );
     }
     // Ownership-attribution rows can legitimately omit standalone-company
     // values even in a combined consolidated/company statement.
-    return financialValueTokens(line, tokens, 2);
+    return financialValueTokens(line, tokens, 2, scale);
   }
   const first = tokens[0];
   if (first === undefined) return [];
@@ -958,10 +1041,12 @@ function extractRow(
     // Some issuers render the statement note as `四 (41)` while others render
     // it as a plain `39`. Keep that column out of the two financial columns
     // without treating a trailing PDF page counter as an inline note.
+    const scale = statementScale(section.text);
     const tokens = financialValueTokens(
       numericLine.line,
       numericLine.tokens,
       section.financialColumnCount,
+      scale,
     );
     const current = tokens[0];
     if (current === undefined) continue;
@@ -970,7 +1055,6 @@ function extractRow(
       .reverse()
       .find((item) => item.offset <= matchStart)?.pageNumber
       ?? section.pageNumber;
-    const scale = statementScale(section.text);
     return {
       current: parseDecimalToken(current[0]),
       currentEvidence: {
@@ -1347,7 +1431,9 @@ export class CninfoProvider implements SourceProvider {
     const sourceUrl = this.webapiUrl(
       "api/stock/p_stock2215"
       + `?scode=${encodeURIComponent(request.instrument.symbol)}`
-      + `&sdate=1990-01-01&edate=${chinaDate(request.asOf)}`,
+      + `&sdate=1990-01-01&edate=${
+        chinaDate(providerKnowledgeAsOf(request))
+      }`,
     );
     const bytes = await fetchBytes(sourceUrl, {
       providerId: this.providerId,
@@ -1414,7 +1500,9 @@ export class CninfoProvider implements SourceProvider {
         secid: "",
         category: query.category,
         trade: "",
-        seDate: `${query.fiscalYear}-01-01~${chinaDate(request.asOf)}`,
+        seDate: `${query.fiscalYear}-01-01~${
+          chinaDate(providerKnowledgeAsOf(request))
+        }`,
         sortName: "",
         sortType: "",
         isHLtitle: "true",
@@ -1422,7 +1510,9 @@ export class CninfoProvider implements SourceProvider {
       context,
     );
     const announcement = parseAnnouncements(parsed)
-      .filter((candidate) => isFullReport(candidate, query, request.asOf))
+      .filter((candidate) =>
+        isFullReport(candidate, query, providerKnowledgeAsOf(request))
+      )
       .sort((left, right) =>
         mainlandReportPreference(right) - mainlandReportPreference(left)
         || right.announcementTime - left.announcementTime
@@ -1581,7 +1671,10 @@ export class CninfoProvider implements SourceProvider {
       return buildBatch();
     }
 
-    const queries = groupRequirements(request.requirements);
+    const queries = groupRequirements(
+      request.requirements,
+      providerKnowledgeAsOf(request),
+    );
     const requestsDividends = request.requirements.some((requirement) =>
       requirement.conceptId === "distribution.dividendPerShare"
     );
@@ -1635,13 +1728,15 @@ export class CninfoProvider implements SourceProvider {
         const shares = selectPointInTimeShares(
           parseShareChanges(response.parsed),
           request.asOf,
+          providerKnowledgeAsOf(request),
         );
         if (shares === undefined) {
           throw new ProviderFailure({
             providerId: this.providerId,
             code: "EMPTY_RESPONSE",
             message:
-              `CNINFO has no disclosed effective share count as of ${request.asOf}`,
+              "CNINFO has no effective share count by "
+              + `${request.asOf} disclosed by ${providerKnowledgeAsOf(request)}`,
             retryable: false,
           });
         }
@@ -1694,7 +1789,9 @@ export class CninfoProvider implements SourceProvider {
                   version: "1.0.0",
                   detail: [
                     `Select latest record effective by ${chinaDate(request.asOf)}`,
-                    `and disclosed by ${chinaDate(request.asOf)}`,
+                    `and disclosed by ${
+                      chinaDate(providerKnowledgeAsOf(request))
+                    }`,
                     shares.reason === undefined
                       ? undefined
                       : `change reason: ${shares.reason}`,
@@ -1837,10 +1934,13 @@ export class CninfoProvider implements SourceProvider {
         );
         rawSnapshots.push(found.snapshot);
         if (found.announcement === undefined) {
+          if (query.revisionEvidenceOnly === true) continue;
           issues.push({
             providerId: this.providerId,
             code: "EMPTY_RESPONSE",
-            message: `CNINFO has no ${query.reportLabel} available as of ${request.asOf}`,
+            message:
+              `CNINFO has no ${query.reportLabel} available as of `
+              + providerKnowledgeAsOf(request),
             retryable: false,
             reasonCode: "REPORT_NOT_AVAILABLE_AS_OF",
             requirements: query.requirements,
@@ -1929,6 +2029,19 @@ export class CninfoProvider implements SourceProvider {
             periodQuery,
             field.statement === "balance" ? "instant" : "duration",
           );
+          const reportingVersion = column === "comparative"
+            ? {
+                kind: "later-comparative" as const,
+                sourcePeriodEndDate: queryEndDate(query),
+              }
+            : {
+                kind: /修订|更正后|更新版/.test(
+                    announcement.announcementTitle,
+                  )
+                  ? "explicit-restatement" as const
+                  : "original-filing" as const,
+                sourcePeriodEndDate: queryEndDate(query),
+              };
           const usesOcr = evidence !== undefined
             && filing.ocr?.metadata.pageNumbers.includes(
               evidence.pageNumber,
@@ -1960,6 +2073,7 @@ export class CninfoProvider implements SourceProvider {
                 : { attribution: field.attribution }),
               currency: "CNY",
             },
+            reportingVersion,
             availability: {
               filingDate,
               publishedAt,

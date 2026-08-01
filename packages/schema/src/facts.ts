@@ -17,14 +17,21 @@ import {
 import { ProvenanceSchema } from "./provenance.js";
 import { DecimalStringSchema } from "./value.js";
 
-export const VERIFIED_FACT_SET_SCHEMA_VERSION = "1.0.0" as const;
+export const VERIFIED_FACT_SET_SCHEMA_VERSION = "1.1.0" as const;
+export const SUPPORTED_VERIFIED_FACT_SET_SCHEMA_VERSIONS = [
+  "1.0.0",
+  VERIFIED_FACT_SET_SCHEMA_VERSION,
+] as const;
 export type VerifiedFactSetSchemaVersion =
-  typeof VERIFIED_FACT_SET_SCHEMA_VERSION;
+  (typeof SUPPORTED_VERIFIED_FACT_SET_SCHEMA_VERSIONS)[number];
 
 export function isSupportedVerifiedFactSetSchemaVersion(
   value: unknown,
 ): value is VerifiedFactSetSchemaVersion {
-  return value === VERIFIED_FACT_SET_SCHEMA_VERSION;
+  return typeof value === "string"
+    && SUPPORTED_VERIFIED_FACT_SET_SCHEMA_VERSIONS.includes(
+      value as VerifiedFactSetSchemaVersion,
+    );
 }
 
 export const FactStatusSchema = z.enum(["verified", "warning", "failed"]);
@@ -82,13 +89,55 @@ export const FactRequestSchema = z.object({
   instrument: z.string().min(1),
   requirements: z.array(FactRequirementSchema).min(1),
   asOf: z.string().datetime({ offset: true }),
+  knowledgeAsOf: z.string().datetime({ offset: true }).optional(),
   freshness: z.object({
     maxAgeSeconds: z.number().int().nonnegative(),
     allowStaleOnProviderFailure: z.boolean(),
     offline: z.boolean().optional(),
   }).optional(),
+}).superRefine((request, context) => {
+  if (
+    request.knowledgeAsOf !== undefined
+    && Date.parse(request.knowledgeAsOf) < Date.parse(request.asOf)
+  ) {
+    context.addIssue({
+      code: "custom",
+      path: ["knowledgeAsOf"],
+      message: "knowledgeAsOf cannot be earlier than asOf",
+    });
+  }
 });
 export type FactRequest = z.infer<typeof FactRequestSchema>;
+
+export const ReportingVersionSchema = z.object({
+  kind: z.enum([
+    "original-filing",
+    "later-comparative",
+    "explicit-restatement",
+  ]),
+  sourcePeriodEndDate: z.string().date().optional(),
+}).strict();
+export type ReportingVersion = z.infer<typeof ReportingVersionSchema>;
+
+export const FactTemporalEvidenceSchema = z.object({
+  factId: z.string().min(1),
+  evidenceAvailableAt: z.string().datetime({ offset: true }),
+  knownAtEffectiveAsOf: z.boolean(),
+  postEffectiveDateObservationIds: z.array(z.string().min(1)),
+}).strict();
+export type FactTemporalEvidence = z.infer<
+  typeof FactTemporalEvidenceSchema
+>;
+
+export const FactSetTemporalContextSchema = z.object({
+  effectiveAsOf: z.string().datetime({ offset: true }),
+  knowledgeAsOf: z.string().datetime({ offset: true }),
+  mode: z.enum(["point-in-time", "post-disclosure"]),
+  facts: z.array(FactTemporalEvidenceSchema),
+}).strict();
+export type FactSetTemporalContext = z.infer<
+  typeof FactSetTemporalContextSchema
+>;
 
 interface ConceptSemanticCandidate {
   concept: ConceptId;
@@ -150,6 +199,7 @@ export const ObservationSchema = z.object({
   scale: DecimalStringSchema,
   period: ReportingPeriodSchema,
   basis: AccountingBasisSchema,
+  reportingVersion: ReportingVersionSchema.optional(),
   availability: AvailabilitySchema,
   provenance: ProvenanceSchema,
 }).superRefine(validateConceptSemantics);
@@ -211,6 +261,7 @@ export const CanonicalFactSchema = z.object({
   unit: z.string().min(1),
   period: ReportingPeriodSchema,
   basis: AccountingBasisSchema,
+  reportingVersion: ReportingVersionSchema.optional(),
   status: FactStatusSchema,
   usable: z.boolean(),
   reasonCodes: z.array(z.string().min(1)),
@@ -243,9 +294,10 @@ export type FactSetLineageVersions =
   z.infer<typeof FactSetLineageVersionsSchema>;
 
 export const VerifiedFactSetSchema = z.object({
-  schemaVersion: z.literal(VERIFIED_FACT_SET_SCHEMA_VERSION),
+  schemaVersion: z.enum(SUPPORTED_VERIFIED_FACT_SET_SCHEMA_VERSIONS),
   factSetId: z.string().min(1),
   request: FactRequestSchema,
+  temporalContext: FactSetTemporalContextSchema.optional(),
   generatedAt: z.string().datetime({ offset: true }),
   company: CompanySchema,
   instruments: z.array(InstrumentSchema),
@@ -262,7 +314,123 @@ export const VerifiedFactSetSchema = z.object({
     unmapped: z.number().int().nonnegative(),
     overallStatus: FactStatusSchema,
   }),
-}).strict().meta({
+}).strict().superRefine((factSet, context) => {
+  if (factSet.schemaVersion !== VERIFIED_FACT_SET_SCHEMA_VERSION) {
+    if (
+      factSet.request.knowledgeAsOf !== undefined
+      || factSet.temporalContext !== undefined
+    ) {
+      context.addIssue({
+        code: "custom",
+        message:
+          "VerifiedFactSet 1.0.0 cannot contain 1.1.0 temporal fields",
+      });
+    }
+    return;
+  }
+  if (factSet.request.knowledgeAsOf === undefined) {
+    context.addIssue({
+      code: "custom",
+      path: ["request", "knowledgeAsOf"],
+      message: "VerifiedFactSet 1.1.0 requires request.knowledgeAsOf",
+    });
+  }
+  if (factSet.temporalContext === undefined) {
+    context.addIssue({
+      code: "custom",
+      path: ["temporalContext"],
+      message: "VerifiedFactSet 1.1.0 requires temporalContext",
+    });
+    return;
+  }
+  const temporal = factSet.temporalContext;
+  const knowledgeAsOf = factSet.request.knowledgeAsOf;
+  if (
+    Date.parse(temporal.effectiveAsOf) !== Date.parse(factSet.request.asOf)
+  ) {
+    context.addIssue({
+      code: "custom",
+      path: ["temporalContext", "effectiveAsOf"],
+      message: "temporalContext.effectiveAsOf must equal request.asOf",
+    });
+  }
+  if (
+    knowledgeAsOf !== undefined
+    && Date.parse(temporal.knowledgeAsOf) !== Date.parse(knowledgeAsOf)
+  ) {
+    context.addIssue({
+      code: "custom",
+      path: ["temporalContext", "knowledgeAsOf"],
+      message:
+        "temporalContext.knowledgeAsOf must equal request.knowledgeAsOf",
+    });
+  }
+  const expectedMode = Date.parse(temporal.knowledgeAsOf)
+      === Date.parse(temporal.effectiveAsOf)
+    ? "point-in-time"
+    : "post-disclosure";
+  if (temporal.mode !== expectedMode) {
+    context.addIssue({
+      code: "custom",
+      path: ["temporalContext", "mode"],
+      message: `temporalContext.mode must be ${expectedMode}`,
+    });
+  }
+  const factsById = new Map(factSet.facts.map((fact) => [fact.factId, fact]));
+  const evidenceFactIds = temporal.facts.map((fact) => fact.factId);
+  if (
+    new Set(evidenceFactIds).size !== evidenceFactIds.length
+    || evidenceFactIds.length !== factsById.size
+    || evidenceFactIds.some((factId) => !factsById.has(factId))
+  ) {
+    context.addIssue({
+      code: "custom",
+      path: ["temporalContext", "facts"],
+      message: "temporalContext.facts must cover every Fact exactly once",
+    });
+  }
+  temporal.facts.forEach((evidence, index) => {
+    const fact = factsById.get(evidence.factId);
+    if (
+      Date.parse(evidence.evidenceAvailableAt)
+        > Date.parse(temporal.knowledgeAsOf)
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["temporalContext", "facts", index, "evidenceAvailableAt"],
+        message: "Fact evidence cannot be later than knowledgeAsOf",
+      });
+    }
+    if (
+      evidence.knownAtEffectiveAsOf
+        !== (evidence.postEffectiveDateObservationIds.length === 0)
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["temporalContext", "facts", index, "knownAtEffectiveAsOf"],
+        message:
+          "knownAtEffectiveAsOf must match post-effective-date evidence",
+      });
+    }
+    if (
+      fact !== undefined
+      && evidence.postEffectiveDateObservationIds.some(
+        (observationId) => !fact.observationIds.includes(observationId),
+      )
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: [
+          "temporalContext",
+          "facts",
+          index,
+          "postEffectiveDateObservationIds",
+        ],
+        message: "Post-date evidence must belong to the referenced Fact",
+      });
+    }
+  });
+}).meta({
   id: `verified-fact-set-${VERIFIED_FACT_SET_SCHEMA_VERSION}`,
   title: "VerifiedFactSet",
   description:

@@ -1,12 +1,13 @@
 import {
   parseVerifiedFactSet,
   type CanonicalFact,
+  type FactTemporalEvidence,
   type FactStatus,
   type ReportingPeriod,
   type VerifiedFactSetSchemaVersion,
 } from "@verified-financial/schema";
 
-export const CLIENT_CONTEXT_VERSION = "1.0.0" as const;
+export const CLIENT_CONTEXT_VERSION = "1.1.0" as const;
 export type ClientContextVersion = typeof CLIENT_CONTEXT_VERSION;
 
 const statusRank: Record<FactStatus, number> = {
@@ -31,6 +32,8 @@ export interface ClientContextFactBase {
   sourceIds: string[];
   reasonCodes: string[];
   observationIds: string[];
+  reportingVersion?: CanonicalFact["reportingVersion"];
+  temporalEvidence?: FactTemporalEvidence;
   derivation?: CanonicalFact["derivation"];
 }
 
@@ -50,6 +53,8 @@ export interface ClientFinancialContext {
     schemaVersion: VerifiedFactSetSchemaVersion;
     generatedAt: string;
     asOf: string;
+    knowledgeAsOf: string;
+    temporalMode: "point-in-time" | "post-disclosure";
   };
   company: {
     companyId: string;
@@ -112,7 +117,10 @@ function periodLabel(period: ReportingPeriod): string {
   }
 }
 
-function contextFactBase(fact: CanonicalFact): ClientContextFactBase {
+function contextFactBase(
+  fact: CanonicalFact,
+  temporalEvidence?: FactTemporalEvidence,
+): ClientContextFactBase {
   return {
     factId: fact.factId,
     concept: fact.concept,
@@ -127,6 +135,10 @@ function contextFactBase(fact: CanonicalFact): ClientContextFactBase {
     ),
     reasonCodes: sortedUnique(fact.reasonCodes),
     observationIds: sortedUnique(fact.observationIds),
+    ...(fact.reportingVersion === undefined
+      ? {}
+      : { reportingVersion: fact.reportingVersion }),
+    ...(temporalEvidence === undefined ? {} : { temporalEvidence }),
     ...(fact.derivation === undefined
       ? {}
       : { derivation: fact.derivation }),
@@ -152,13 +164,22 @@ export function buildClientFinancialContext(
   );
   const acceptedFacts: AcceptedClientContextFact[] = [];
   const blockedFacts: BlockedClientContextFact[] = [];
+  const temporalEvidenceByFactId = new Map(
+    (factSet.temporalContext?.facts ?? []).map((evidence) => [
+      evidence.factId,
+      evidence,
+    ]),
+  );
 
   for (
     const fact of [...factSet.facts].sort(
       (left, right) => left.factId.localeCompare(right.factId),
     )
   ) {
-    const base = contextFactBase(fact);
+    const base = contextFactBase(
+      fact,
+      temporalEvidenceByFactId.get(fact.factId),
+    );
     if (fact.usable && meetsMinimumStatus(fact.status, minimumStatus)) {
       acceptedFacts.push({
         ...base,
@@ -178,6 +199,9 @@ export function buildClientFinancialContext(
     ...factSet.facts.flatMap((fact) => fact.reasonCodes),
     ...factSet.facts.flatMap((fact) => fact.verification.reasonCodes),
     ...factSet.unmapped.map((unmapped) => unmapped.reasonCode),
+    ...(factSet.temporalContext?.mode === "post-disclosure"
+      ? ["POST_DISCLOSURE_CONTEXT"]
+      : []),
     ...(gatePassed ? [] : ["FACT_SET_BELOW_MINIMUM_STATUS"]),
   ]);
 
@@ -188,6 +212,8 @@ export function buildClientFinancialContext(
       schemaVersion: factSet.schemaVersion,
       generatedAt: factSet.generatedAt,
       asOf: factSet.request.asOf,
+      knowledgeAsOf: factSet.request.knowledgeAsOf ?? factSet.request.asOf,
+      temporalMode: factSet.temporalContext?.mode ?? "point-in-time",
     },
     company: factSet.company,
     instruments: [...factSet.instruments]

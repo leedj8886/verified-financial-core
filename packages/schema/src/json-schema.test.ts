@@ -16,7 +16,7 @@ import {
 function loadContractFixture(): unknown {
   const path = fileURLToPath(
     new URL(
-      "../../../tests/golden/contracts/verified-fact-set-1.0.0.json",
+      "../../../tests/golden/contracts/verified-fact-set-1.1.0.json",
       import.meta.url,
     ),
   );
@@ -31,10 +31,7 @@ describe("VerifiedFactSet JSON contract", () => {
       title: "VerifiedFactSet",
       additionalProperties: false,
       properties: {
-        schemaVersion: {
-          type: "string",
-          const: VERIFIED_FACT_SET_SCHEMA_VERSION,
-        },
+        schemaVersion: expect.objectContaining({ type: "string" }),
       },
     });
   });
@@ -51,7 +48,7 @@ describe("VerifiedFactSet JSON contract", () => {
     expect(zodParsed.summary.overallStatus).toBe("verified");
     expect(zodParsed.lineageVersions).toMatchObject({
       conceptRegistryVersion: "1.0.0",
-      validationRulesVersion: "1.6.0",
+      validationRulesVersion: "1.10.0",
     });
   });
 
@@ -60,6 +57,6 @@ describe("VerifiedFactSet JSON contract", () => {
       .update(JSON.stringify(VERIFIED_FACT_SET_JSON_SCHEMA))
       .digest("hex");
     expect(fingerprint)
-      .toBe("0a78079951bd18d2d28fe693ad0301a140db491e970c2979e535603d2d087efe");
+      .toBe("496955dac173030f2bdcbdc894bc079e9d60ac8044d2836c0dff0bfa40060f95");
   });
 });

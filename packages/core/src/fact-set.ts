@@ -5,6 +5,7 @@ import {
   type Company,
   type FactRequirement,
   type FactRequest,
+  type FactSetTemporalContext,
   type Instrument,
   type UnmappedObservation,
   type VerificationResult,
@@ -27,6 +28,7 @@ export interface BuildFactSetInput {
   mappingVersions: string[];
   validationRulesVersion: string;
   reasonCodes?: string[];
+  temporalContext?: FactSetTemporalContext;
 }
 
 function matchesRequirement(
@@ -107,6 +109,9 @@ export function buildFactSet(input: BuildFactSetInput): VerifiedFactSet {
   const identityPayload = {
     schemaVersion: input.schemaVersion,
     request: normalizedRequest,
+    ...(input.temporalContext === undefined
+      ? {}
+      : { temporalContext: input.temporalContext }),
     company: input.company,
     instruments,
     facts,
@@ -130,6 +135,9 @@ export function buildFactSet(input: BuildFactSetInput): VerifiedFactSet {
     schemaVersion: input.schemaVersion,
     factSetId: stableId("fs", identityPayload),
     request: normalizedRequest,
+    ...(input.temporalContext === undefined
+      ? {}
+      : { temporalContext: input.temporalContext }),
     generatedAt: input.generatedAt,
     company: input.company,
     instruments,

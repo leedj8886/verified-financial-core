@@ -49,7 +49,7 @@ const observation = {
 
 function emptyFactSetInput() {
   return {
-    schemaVersion: VERIFIED_FACT_SET_SCHEMA_VERSION,
+    schemaVersion: "1.0.0" as const,
     factSetId: "fs:empty",
     request: {
       instrument: "XSHG:600519",
@@ -121,6 +121,50 @@ describe("financial fact contracts", () => {
       asOf: "2026-07-26T23:59:59+08:00",
     });
     expect(request.requirements[0]?.required).toBe(true);
+  });
+
+  it("accepts an explicit post-disclosure knowledge cutoff", () => {
+    const request = FactRequestSchema.parse({
+      instrument: "XSHG:600519",
+      requirements: [{
+        conceptId: "income.revenue",
+        required: true,
+        period: {
+          fiscalYear: 2024,
+          fiscalQuarter: 2,
+          presentation: "ttm",
+        },
+      }],
+      asOf: "2024-08-30T23:59:59+08:00",
+      knowledgeAsOf: "2024-09-30T23:59:59+08:00",
+    });
+
+    expect(request.knowledgeAsOf).toBe("2024-09-30T23:59:59+08:00");
+  });
+
+  it("distinguishes original filings from later comparative versions", () => {
+    expect(ObservationSchema.parse({
+      ...observation,
+      reportingVersion: {
+        kind: "later-comparative",
+        sourcePeriodEndDate: "2026-12-31",
+      },
+    }).reportingVersion).toEqual({
+      kind: "later-comparative",
+      sourcePeriodEndDate: "2026-12-31",
+    });
+  });
+
+  it("rejects a knowledge cutoff before the effective as-of", () => {
+    expect(() => FactRequestSchema.parse({
+      instrument: "XSHG:600519",
+      requirements: [{
+        conceptId: "income.revenue",
+        required: true,
+      }],
+      asOf: "2024-08-30T23:59:59+08:00",
+      knowledgeAsOf: "2024-08-29T23:59:59+08:00",
+    })).toThrow("knowledgeAsOf cannot be earlier than asOf");
   });
 
   it("rejects unsupported presentations", () => {
@@ -202,8 +246,9 @@ describe("financial fact contracts", () => {
   });
 
   it("rejects unsupported versions and unknown top-level fields", () => {
-    expect(VERIFIED_FACT_SET_SCHEMA_VERSION).toBe("1.0.0");
+    expect(VERIFIED_FACT_SET_SCHEMA_VERSION).toBe("1.1.0");
     expect(isSupportedVerifiedFactSetSchemaVersion("1.0.0")).toBe(true);
+    expect(isSupportedVerifiedFactSetSchemaVersion("1.1.0")).toBe(true);
     expect(isSupportedVerifiedFactSetSchemaVersion("2.0.0")).toBe(false);
     expect(() => parseVerifiedFactSet({
       schemaVersion: "2.0.0",
@@ -213,5 +258,31 @@ describe("financial fact contracts", () => {
       ...valid,
       unexpected: true,
     })).toThrow("Unrecognized key");
+  });
+
+  it("requires explicit temporal metadata for 1.1.0 FactSets", () => {
+    expect(() => VerifiedFactSetSchema.parse({
+      ...emptyFactSetInput(),
+      schemaVersion: "1.1.0",
+    })).toThrow("requires request.knowledgeAsOf");
+  });
+
+  it("keeps 1.1.0 request and temporal context consistent", () => {
+    const current = {
+      ...emptyFactSetInput(),
+      schemaVersion: "1.1.0" as const,
+      request: {
+        ...emptyFactSetInput().request,
+        knowledgeAsOf: "2026-07-26T23:59:59+08:00",
+      },
+      temporalContext: {
+        effectiveAsOf: "2026-07-26T23:59:59+08:00",
+        knowledgeAsOf: "2026-07-26T23:59:59+08:00",
+        mode: "post-disclosure" as const,
+        facts: [],
+      },
+    };
+    expect(() => VerifiedFactSetSchema.parse(current))
+      .toThrow("temporalContext.mode must be point-in-time");
   });
 });

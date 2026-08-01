@@ -17,7 +17,7 @@ function loadJson(relativePath: string): unknown {
 
 function loadFactSet(): VerifiedFactSet {
   return parseVerifiedFactSet(loadJson(
-    "../../../tests/golden/contracts/verified-fact-set-1.0.0.json",
+    "../../../tests/golden/contracts/verified-fact-set-1.1.0.json",
   ));
 }
 
@@ -25,7 +25,7 @@ describe("client financial context", () => {
   it("matches the Golden consumer contract", () => {
     const context = buildClientFinancialContext(loadFactSet());
     const expected = loadJson(
-      "../../../tests/golden/consumers/client-context-1.0.0.json",
+      "../../../tests/golden/consumers/client-context-1.1.0.json",
     );
     expect(context).toEqual(expected);
     expect(JSON.parse(formatClientFinancialContext(loadFactSet())))
@@ -84,6 +84,10 @@ describe("client financial context", () => {
       reasonCodes: ["SOURCE_CONFLICT"],
     };
     factSet.facts.push(failedFact);
+    factSet.temporalContext!.facts.push({
+      ...factSet.temporalContext!.facts[0]!,
+      factId: failedFact.factId,
+    });
     factSet.summary = {
       verified: 0,
       warnings: 1,
@@ -112,5 +116,34 @@ describe("client financial context", () => {
     expect(() => buildClientFinancialContext({
       schemaVersion: "1.0.0",
     })).toThrow();
+  });
+
+  it("warns LLM clients when evidence was disclosed after the effective date", () => {
+    const factSet = structuredClone(loadFactSet());
+    factSet.request.knowledgeAsOf = "2026-05-01T23:59:59+08:00";
+    factSet.temporalContext = {
+      effectiveAsOf: factSet.request.asOf,
+      knowledgeAsOf: factSet.request.knowledgeAsOf,
+      mode: "post-disclosure",
+      facts: [{
+        factId: factSet.facts[0]!.factId,
+        evidenceAvailableAt: "2026-04-30T18:00:00+08:00",
+        knownAtEffectiveAsOf: false,
+        postEffectiveDateObservationIds: [
+          factSet.facts[0]!.observationIds[0]!,
+        ],
+      }],
+    };
+
+    const context = buildClientFinancialContext(factSet);
+    expect(context.factSet).toMatchObject({
+      asOf: "2026-04-18T23:59:59+08:00",
+      knowledgeAsOf: "2026-05-01T23:59:59+08:00",
+      temporalMode: "post-disclosure",
+    });
+    expect(context.acceptedFacts[0]?.temporalEvidence).toMatchObject({
+      knownAtEffectiveAsOf: false,
+    });
+    expect(context.issues).toContain("POST_DISCLOSURE_CONTEXT");
   });
 });

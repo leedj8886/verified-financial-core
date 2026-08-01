@@ -259,6 +259,67 @@ describe("EastmoneyProvider", () => {
     });
   });
 
+  it("marks a later historical row as a comparative reporting version", async () => {
+    const provider = new EastmoneyProvider({
+      fetchImplementation: async () => new Response(JSON.stringify({
+        result: {
+          data: [{
+            SECURITY_CODE: "600030",
+            SECURITY_NAME_ABBR: "中信证券",
+            REPORT_DATE: "2024-06-30 00:00:00",
+            NOTICE_DATE: "2025-08-29 00:00:00",
+            TOTAL_OPERATE_INCOME: 27433010105.09,
+          }],
+        },
+      })),
+      financialEndpoint: "https://financial.example/api",
+      retries: 0,
+    });
+    const batch = parseProviderBatch(provider, await provider.fetch({
+      instrument: {
+        instrumentId: "XSHG:600030",
+        companyId: "company:XSHG:600030",
+        exchangeMic: "XSHG",
+        symbol: "600030",
+        shareClass: "A",
+        tradingCurrency: "CNY",
+      },
+      requirements: [{
+        conceptId: "income.revenue",
+        required: true,
+        period: {
+          fiscalYear: 2024,
+          fiscalQuarter: 2,
+          presentation: "ytd",
+        },
+      }],
+      asOf: "2024-09-02T23:59:59+08:00",
+      knowledgeAsOf: "2026-08-01T23:59:59+08:00",
+      offline: false,
+    }, {
+      signal: new AbortController().signal,
+      now: "2026-08-01T10:00:00+08:00",
+      snapshots,
+    }));
+
+    expect(batch.observations).toEqual([
+      expect.objectContaining({
+        value: "27433010105.09",
+        reportingVersion: {
+          kind: "later-comparative",
+          sourcePeriodEndDate: "2025-06-30",
+        },
+        provenance: expect.objectContaining({
+          transformations: expect.arrayContaining([
+            expect.objectContaining({
+              transformId: "historical-comparative-record",
+            }),
+          ]),
+        }),
+      }),
+    ]);
+  });
+
   it("aggregates implemented A-share cash distributions by fiscal year", async () => {
     const fetchImplementation = vi.fn<FetchImplementation>(
       async (input) => {

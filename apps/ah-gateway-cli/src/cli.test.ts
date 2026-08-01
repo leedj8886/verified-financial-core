@@ -138,6 +138,28 @@ describe("ah-context JSON CLI", () => {
     }));
   });
 
+  it("passes an explicit knowledge cutoff for post-disclosure analysis", async () => {
+    const output = captureIo();
+    const gateway = makeGateway();
+    await runCli([
+      "facts",
+      "600519.SH",
+      "--concept",
+      "income.revenue",
+      "--period",
+      "2024Q2TTM",
+      "--as-of",
+      "2024-08-30",
+      "--knowledge-as-of",
+      "2024-09-30",
+    ], gateway, output.io);
+
+    expect(gateway.getFacts).toHaveBeenCalledWith(expect.objectContaining({
+      asOf: "2024-08-30T23:59:59+08:00",
+      knowledgeAsOf: "2024-09-30T23:59:59+08:00",
+    }));
+  });
+
   it("keeps invalid input diagnostics on stderr", async () => {
     const output = captureIo();
     expect(await runCli(["facts", "600519.SH"], makeGateway(), output.io))

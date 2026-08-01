@@ -98,6 +98,7 @@ function request(
   asOf: string,
   period: FactPeriodSelector,
   scope: AuditScope,
+  knowledgeAsOf: string = asOf,
 ): FactRequest {
   const conceptIds = scope === "financial"
     ? ["income.revenue", "income.netProfitParent"] as const
@@ -110,6 +111,7 @@ function request(
       period,
     })),
     asOf,
+    knowledgeAsOf,
     freshness: {
       maxAgeSeconds: 0,
       allowStaleOnProviderFailure: false,
@@ -360,15 +362,17 @@ try {
         const instrument = instrumentFor(company.code);
         const baselineFinancialRequest = request(
           instrument,
-          baselineFinancialAsOf,
+          baselineMarketAsOf,
           baselinePeriod,
           "financial",
+          baselineFinancialAsOf,
         );
         const latestFinancialRequest = request(
           instrument,
-          latestFinancialAsOf,
+          latestMarketAsOf,
           latestPeriod,
           "financial",
+          latestFinancialAsOf,
         );
         const baselineMarketRequest = request(
           instrument,

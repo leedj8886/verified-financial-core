@@ -119,6 +119,7 @@ async function runFacts(
       concept: { type: "string", multiple: true },
       period: { type: "string" },
       "as-of": { type: "string" },
+      "knowledge-as-of": { type: "string" },
       "max-age-seconds": { type: "string" },
       offline: { type: "boolean", default: false },
       "require-status": { type: "string" },
@@ -149,6 +150,9 @@ async function runFacts(
     instrument: positionals[0]!,
     requirements,
     asOf: normalizeAsOf(values["as-of"]),
+    ...(values["knowledge-as-of"] === undefined
+      ? {}
+      : { knowledgeAsOf: normalizeAsOf(values["knowledge-as-of"]) }),
     freshness: {
       maxAgeSeconds,
       allowStaleOnProviderFailure: true,

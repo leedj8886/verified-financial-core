@@ -92,9 +92,22 @@ function derivedFact(input: {
     inputFactIds,
     expression: input.formula.expression,
   };
+  const reportingVersionKinds = input.inputs.flatMap((fact) =>
+    fact.reportingVersion === undefined ? [] : [fact.reportingVersion.kind]
+  );
+  const reportingVersion = reportingVersionKinds.includes(
+      "explicit-restatement",
+    )
+    ? { kind: "explicit-restatement" as const }
+    : reportingVersionKinds.includes("later-comparative")
+      ? { kind: "later-comparative" as const }
+      : reportingVersionKinds.length > 0
+        ? { kind: "original-filing" as const }
+        : undefined;
   const digest = createHash("sha256").update(JSON.stringify({
     concept: input.concept, value: input.value.toString(),
-    unit: input.unit, period: input.period, basis: input.basis, derivation,
+    unit: input.unit, period: input.period, basis: input.basis,
+    reportingVersion, derivation,
   })).digest("hex");
   return CanonicalFactSchema.parse({
     factId: `fact:${digest}`,
@@ -107,6 +120,7 @@ function derivedFact(input: {
     unit: input.unit,
     period: input.period,
     basis: input.basis,
+    ...(reportingVersion === undefined ? {} : { reportingVersion }),
     status,
     usable: true,
     reasonCodes,

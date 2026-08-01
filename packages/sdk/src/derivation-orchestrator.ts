@@ -42,16 +42,46 @@ function matchesRequirement(
 }
 
 function sortedFacts(facts: readonly CanonicalFact[]): CanonicalFact[] {
-  return [...facts].sort((left, right) => left.factId.localeCompare(right.factId));
+  return [...facts].sort((left, right) => {
+    const revisionRank = (fact: CanonicalFact): number => ({
+      "explicit-restatement": 2,
+      "later-comparative": 1,
+      "original-filing": 0,
+    })[fact.reportingVersion?.kind ?? "original-filing"];
+    const rankDifference = revisionRank(right) - revisionRank(left);
+    if (rankDifference !== 0) return rankDifference;
+    const leftSourcePeriod = left.reportingVersion?.sourcePeriodEndDate
+      ?? left.period.endDate;
+    const rightSourcePeriod = right.reportingVersion?.sourcePeriodEndDate
+      ?? right.period.endDate;
+    return rightSourcePeriod.localeCompare(leftSourcePeriod)
+      || left.factId.localeCompare(right.factId);
+  });
+}
+
+function preferredVersionFacts(
+  facts: readonly CanonicalFact[],
+): CanonicalFact[] {
+  const ordered = sortedFacts(facts);
+  const preferred = ordered[0];
+  if (preferred === undefined) return [];
+  const preferredKind = preferred.reportingVersion?.kind ?? "original-filing";
+  const preferredSourcePeriod = preferred.reportingVersion?.sourcePeriodEndDate
+    ?? preferred.period.endDate;
+  return ordered.filter((fact) =>
+    (fact.reportingVersion?.kind ?? "original-filing") === preferredKind
+    && (fact.reportingVersion?.sourcePeriodEndDate ?? fact.period.endDate)
+      === preferredSourcePeriod
+  );
 }
 
 function usableMatches(
   facts: readonly CanonicalFact[],
   requirement: FactRequirement,
 ): CanonicalFact[] {
-  return sortedFacts(
-    facts.filter((fact) => fact.usable && matchesRequirement(fact, requirement)),
-  );
+  return preferredVersionFacts(
+    facts.filter((fact) => matchesRequirement(fact, requirement)),
+  ).filter((fact) => fact.usable);
 }
 
 function periodRequirement(
@@ -364,7 +394,7 @@ export function materializeRequestedFacts(
   const reasonCodes: string[] = [];
 
   for (const requirement of originalRequirements) {
-    const direct = sortedFacts(
+    const direct = preferredVersionFacts(
       baseFacts.filter((fact) => matchesRequirement(fact, requirement)),
     );
     const usableDirect = direct.filter((fact) => fact.usable);

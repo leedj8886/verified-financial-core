@@ -167,6 +167,43 @@ describe("CninfoProvider", () => {
       fiscalYear: 2024,
       presentation: "annual",
     });
+
+    const retrospectiveBatch = parseProviderBatch(
+      provider,
+      await provider.fetch({
+        ...request,
+        instrument: {
+          instrumentId: "XSHG:601111",
+          companyId: "company:XSHG:601111",
+          exchangeMic: "XSHG",
+          symbol: "601111",
+          shareClass: "A",
+          tradingCurrency: "CNY",
+        },
+        requirements: [{
+          conceptId: "market.shares.outstanding",
+          required: true,
+        }],
+        asOf: "2024-08-30T23:59:59+08:00",
+        knowledgeAsOf: "2024-09-30T23:59:59+08:00",
+      }, {
+        signal: new AbortController().signal,
+        now: "2026-07-30T10:00:00+08:00",
+        snapshots,
+      }),
+    );
+    expect(retrospectiveBatch.observations[0]).toMatchObject({
+      period: { endDate: "2024-08-30" },
+      availability: {
+        effectiveDate: "2024-06-30",
+        filingDate: "2024-08-31",
+      },
+    });
+    const shareChangeUrls = fetchImplementation.mock.calls
+      .map(([input]) => new URL(String(input)))
+      .filter((url) => url.pathname.endsWith("/api/stock/p_stock2215"));
+    expect(shareChangeUrls.at(-1)?.searchParams.get("edate"))
+      .toBe("2024-09-30");
   });
 
   it("extracts current consolidated values without crossing statement boundaries", async () => {
@@ -482,26 +519,15 @@ describe("CninfoProvider", () => {
         shareClass: "A",
         tradingCurrency: "CNY",
       },
-      requirements: concepts.flatMap((conceptId) => [
-        {
-          conceptId,
-          required: false,
-          period: {
-            fiscalYear: 2025,
-            fiscalQuarter: 1 as const,
-            presentation: "ytd" as const,
-          },
+      requirements: concepts.map((conceptId) => ({
+        conceptId,
+        required: false,
+        period: {
+          fiscalYear: 2025,
+          fiscalQuarter: 1 as const,
+          presentation: "ytd" as const,
         },
-        {
-          conceptId,
-          required: false,
-          period: {
-            fiscalYear: 2026,
-            fiscalQuarter: 1 as const,
-            presentation: "ytd" as const,
-          },
-        },
-      ]),
+      })),
       asOf: "2026-07-29T23:59:59+08:00",
       offline: false,
     }, {
@@ -519,6 +545,10 @@ describe("CninfoProvider", () => {
           fiscalQuarter: 1,
           presentation: "ytd",
         }),
+        reportingVersion: {
+          kind: "later-comparative",
+          sourcePeriodEndDate: "2026-03-31",
+        },
         provenance: expect.objectContaining({
           documentId: "1225261166",
           rawField: "合并利润表.营业总收入.上年同期",

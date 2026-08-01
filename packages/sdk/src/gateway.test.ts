@@ -14,6 +14,7 @@ import type {
   ConceptId,
   FactRequest,
   ReportingPeriod,
+  ReportingVersion,
 } from "@verified-financial/schema";
 import {
   ContentAddressedSnapshotStore,
@@ -41,6 +42,7 @@ interface DerivationRecord {
   basis: AccountingBasis;
   instrumentScoped?: boolean;
   publishedAt?: string;
+  reportingVersion?: ReportingVersion;
 }
 
 function makeDerivationProvider(options: {
@@ -107,6 +109,9 @@ function makeDerivationProvider(options: {
         scale: "1",
         period: record.period,
         basis: record.basis,
+        ...(record.reportingVersion === undefined
+          ? {}
+          : { reportingVersion: record.reportingVersion }),
         availability: {
           publishedAt: record.publishedAt
             ?? "2026-07-20T18:00:00+08:00",
@@ -1031,6 +1036,291 @@ describe("FinancialGateway", () => {
       "PROVIDER_INPUT_MISSING:historical-revision:"
       + "income.revenue:2023-06-30:ytd:EMPTY_RESPONSE",
     );
+
+    const retrospective = await gateway.getFacts({
+      instrument: "600519.SH",
+      requirements: [{
+        conceptId: "income.revenue",
+        required: true,
+        period: {
+          fiscalYear: 2024,
+          fiscalQuarter: 2,
+          presentation: "ttm",
+        },
+      }],
+      asOf: "2024-08-30T23:59:59+08:00",
+      knowledgeAsOf: "2025-04-30T23:59:59+08:00",
+    });
+    expect(retrospective.facts).toEqual([
+      expect.objectContaining({
+        concept: "income.revenue",
+        value: "140",
+        period: expect.objectContaining({ presentation: "ttm" }),
+      }),
+    ]);
+    expect(retrospective.temporalContext).toMatchObject({
+      mode: "post-disclosure",
+      facts: [{
+        knownAtEffectiveAsOf: false,
+        evidenceAvailableAt: "2025-04-22T18:00:00+08:00",
+        postEffectiveDateObservationIds: [
+          "obs:historical-revision:income.revenue:2023:2:ytd:2",
+        ],
+      }],
+    });
+  });
+
+  it("uses later comparative versions without conflicting with originals", async () => {
+    const basis: AccountingBasis = {
+      standard: "CAS",
+      scope: "consolidated",
+      presentation: "reported",
+      attribution: "parent",
+      currency: "CNY",
+    };
+    const original = makeDerivationProvider({
+      providerId: "official-original",
+      capabilities: ["financials"],
+      sourceType: "official",
+      records: [
+        {
+          concept: "income.revenue",
+          value: "301",
+          unit: "CNY",
+          period: {
+            kind: "duration",
+            startDate: "2024-01-01",
+            endDate: "2024-06-30",
+            fiscalYear: 2024,
+            fiscalQuarter: 2,
+            presentation: "ytd",
+          },
+          basis,
+          publishedAt: "2024-08-29T18:00:00+08:00",
+          reportingVersion: {
+            kind: "original-filing",
+            sourcePeriodEndDate: "2024-06-30",
+          },
+        },
+        {
+          concept: "income.revenue",
+          value: "100",
+          unit: "CNY",
+          period: {
+            kind: "duration",
+            startDate: "2023-01-01",
+            endDate: "2023-12-31",
+            fiscalYear: 2023,
+            presentation: "annual",
+          },
+          basis,
+          publishedAt: "2024-03-20T18:00:00+08:00",
+        },
+        {
+          concept: "income.revenue",
+          value: "40",
+          unit: "CNY",
+          period: {
+            kind: "duration",
+            startDate: "2023-01-01",
+            endDate: "2023-06-30",
+            fiscalYear: 2023,
+            fiscalQuarter: 2,
+            presentation: "ytd",
+          },
+          basis,
+          publishedAt: "2023-08-20T18:00:00+08:00",
+        },
+      ],
+    });
+    const comparative = makeDerivationProvider({
+      providerId: "later-comparative",
+      capabilities: ["financials"],
+      records: [{
+        concept: "income.revenue",
+        value: "274",
+        unit: "CNY",
+        period: {
+          kind: "duration",
+          startDate: "2024-01-01",
+          endDate: "2024-06-30",
+          fiscalYear: 2024,
+          fiscalQuarter: 2,
+          presentation: "ytd",
+        },
+        basis,
+        publishedAt: "2025-08-29T18:00:00+08:00",
+        reportingVersion: {
+          kind: "later-comparative",
+          sourcePeriodEndDate: "2025-06-30",
+        },
+      }],
+    });
+    const { gateway } = await makeGateway([
+      original.provider,
+      comparative.provider,
+    ]);
+    const requirement = {
+      conceptId: "income.revenue" as const,
+      required: true,
+      period: {
+        fiscalYear: 2024,
+        fiscalQuarter: 2 as const,
+        presentation: "ttm" as const,
+      },
+    };
+
+    const strict = await gateway.getFacts({
+      instrument: "600519.SH",
+      requirements: [requirement],
+      asOf: "2024-09-02T23:59:59+08:00",
+    });
+    expect(strict.facts[0]).toMatchObject({ value: "361" });
+
+    const retrospective = await gateway.getFacts({
+      instrument: "600519.SH",
+      requirements: [requirement],
+      asOf: "2024-09-02T23:59:59+08:00",
+      knowledgeAsOf: "2026-08-01T23:59:59+08:00",
+    });
+    expect(retrospective.facts[0]).toMatchObject({
+      value: "334",
+      reportingVersion: { kind: "later-comparative" },
+    });
+    expect(retrospective.reasonCodes).not.toContain(
+      "OFFICIAL_OVERRIDE_SOURCE_CONFLICT",
+    );
+  });
+
+  it("does not fall back when the newest reporting version fails", async () => {
+    const basis: AccountingBasis = {
+      standard: "CAS",
+      scope: "consolidated",
+      presentation: "reported",
+      attribution: "parent",
+      currency: "CNY",
+    };
+    const period: ReportingPeriod = {
+      kind: "duration",
+      startDate: "2024-01-01",
+      endDate: "2024-06-30",
+      fiscalYear: 2024,
+      fiscalQuarter: 2,
+      presentation: "ytd",
+    };
+    const provider = (
+      providerId: string,
+      value: string,
+      reportingVersion: ReportingVersion,
+      sourceType: "official" | "aggregator",
+    ) => makeDerivationProvider({
+      providerId,
+      capabilities: ["financials"],
+      sourceType,
+      records: [{
+        concept: "income.revenue",
+        value,
+        unit: "CNY",
+        period,
+        basis,
+        reportingVersion,
+        publishedAt: reportingVersion.kind === "original-filing"
+          ? "2024-08-29T18:00:00+08:00"
+          : "2025-08-29T18:00:00+08:00",
+      }],
+    }).provider;
+    const originalVersion: ReportingVersion = {
+      kind: "original-filing",
+      sourcePeriodEndDate: "2024-06-30",
+    };
+    const laterVersion: ReportingVersion = {
+      kind: "later-comparative",
+      sourcePeriodEndDate: "2025-06-30",
+    };
+    const { gateway } = await makeGateway([
+      provider("original", "301", originalVersion, "official"),
+      provider("later-official", "274", laterVersion, "official"),
+      provider("later-aggregator", "200", laterVersion, "aggregator"),
+    ]);
+
+    const factSet = await gateway.getFacts({
+      instrument: "600519.SH",
+      requirements: [{
+        conceptId: "income.revenue",
+        required: true,
+        period: {
+          fiscalYear: 2024,
+          fiscalQuarter: 2,
+          presentation: "ytd",
+        },
+      }],
+      asOf: "2024-09-02T23:59:59+08:00",
+      knowledgeAsOf: "2026-08-01T23:59:59+08:00",
+    });
+
+    expect(factSet.facts).toEqual([
+      expect.objectContaining({
+        value: "274",
+        usable: false,
+        status: "failed",
+        reportingVersion: laterVersion,
+        reasonCodes: ["OFFICIAL_OVERRIDE_SOURCE_CONFLICT"],
+      }),
+    ]);
+    expect(factSet.facts).not.toEqual([
+      expect.objectContaining({ value: "301", usable: true }),
+    ]);
+  });
+
+  it("uses a later knowledge cutoff without moving the effective as-of", async () => {
+    const provider = makeProvider({
+      providerId: "post-disclosure",
+      publishedAt: "2024-09-02T18:00:00+08:00",
+    });
+    const fetch = vi.spyOn(provider, "fetch");
+    const { gateway } = await makeGateway([provider]);
+    const factSet = await gateway.getFacts({
+      ...request,
+      asOf: "2024-08-30T23:59:59+08:00",
+      knowledgeAsOf: "2024-09-30T23:59:59+08:00",
+    });
+
+    expect(fetch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        asOf: "2024-08-30T23:59:59+08:00",
+        knowledgeAsOf: "2024-09-30T23:59:59+08:00",
+      }),
+      expect.anything(),
+    );
+    expect(factSet.facts).toHaveLength(1);
+    expect(factSet.request.knowledgeAsOf)
+      .toBe("2024-09-30T23:59:59+08:00");
+    expect(factSet.temporalContext).toMatchObject({
+      effectiveAsOf: "2024-08-30T23:59:59+08:00",
+      knowledgeAsOf: "2024-09-30T23:59:59+08:00",
+      mode: "post-disclosure",
+      facts: [{
+        knownAtEffectiveAsOf: false,
+        evidenceAvailableAt: "2024-09-02T18:00:00+08:00",
+        postEffectiveDateObservationIds: ["obs:post-disclosure"],
+      }],
+    });
+  });
+
+  it("keeps omitted knowledgeAsOf in strict point-in-time mode", async () => {
+    const { gateway } = await makeGateway([makeProvider({
+      providerId: "strict",
+      publishedAt: "2026-03-20T18:00:00+08:00",
+    })]);
+    const factSet = await gateway.getFacts(request);
+
+    expect(factSet.request.knowledgeAsOf).toBe(request.asOf);
+    expect(factSet.temporalContext).toMatchObject({
+      effectiveAsOf: request.asOf,
+      knowledgeAsOf: request.asOf,
+      mode: "point-in-time",
+      facts: [{ knownAtEffectiveAsOf: true }],
+    });
   });
 
   it("does not classify an expected report gap as a provider failure", async () => {

@@ -237,6 +237,19 @@ describe("HkexProvider", () => {
       .toBe("2026-03-18T16:30:00+08:00");
     expect(batch.rawSnapshots.map((snapshot) => snapshot.mediaType))
       .toEqual(["text", "json", "json", "pdf"]);
+
+    const retrospective = await provider.fetch({
+      ...request,
+      asOf: "2026-03-17T23:59:59+08:00",
+      knowledgeAsOf: "2026-03-18T16:31:00+08:00",
+    }, {
+      signal: new AbortController().signal,
+      now: "2026-03-18T16:31:00+08:00",
+      snapshots,
+    });
+    expect(retrospective.issues).toEqual([]);
+    expect(retrospective.observations[0]?.provenance.documentId)
+      .toBe("12056832");
   });
 
   it("reads the official cash amount and waits for shareholder approval", async () => {

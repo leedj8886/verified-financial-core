@@ -11,6 +11,7 @@ import {
   type FactRequest,
   type Observation,
   type ReportingPeriod,
+  type ReportingVersion,
   type UnmappedObservation,
 } from "@verified-financial/schema";
 
@@ -28,6 +29,7 @@ interface ObservationOverrides {
   providerId?: string;
   upstreamSourceId?: string;
   sourceType?: "official" | "first-party" | "aggregator";
+  reportingVersion?: ReportingVersion;
 }
 
 export function makeObservation(
@@ -68,6 +70,9 @@ export function makeObservation(
       currency: "CNY",
       ...overrides.basis,
     },
+    ...(overrides.reportingVersion === undefined
+      ? {}
+      : { reportingVersion: overrides.reportingVersion }),
     availability: {
       publishedAt: "2026-03-20T18:00:00+08:00",
       fetchedAt: "2026-07-26T10:00:00+08:00",
@@ -133,6 +138,9 @@ export function makeFact(overrides: FactOverrides = {}): CanonicalFact {
     unit: observation.unit,
     period: observation.period,
     basis: observation.basis,
+    ...(observation.reportingVersion === undefined
+      ? {}
+      : { reportingVersion: observation.reportingVersion }),
     status,
     usable,
     reasonCodes: [],

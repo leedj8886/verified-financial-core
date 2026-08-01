@@ -137,7 +137,8 @@ describe("CNINFO OCR adapter", () => {
   it("marks combined consolidated/company OCR statements as four-column tables", () => {
     const text = reconstructOcrPage(blocks(
       line(800, 100, "2023 年 度 利 润 表"),
-      line(800, 140, "合 并 公 司 公 司"),
+      line(800, 140, "合 并 公 司"),
+      line(800, 160, "2024 年 度 2023 年 度 2024 年 度 2023 年 度"),
       line(250, 300, "一 、 营 业 收 入"),
       line(1000, 300, "113,741 46,305 74,937 32,213"),
       line(250, 340, "归 属 于 母 公 司 股 东 的 净 亏 损"),
@@ -145,6 +146,27 @@ describe("CNINFO OCR adapter", () => {
     ));
 
     expect(text.startsWith("合并及公司利润表\n")).toBe(true);
+  });
+
+  it("upgrades a generic income heading when OCR reveals four columns", () => {
+    const text = reconstructOcrPage(blocks(
+      line(800, 100, "合 并 利 润 表"),
+      line(800, 120, "金 额 单 位 为 人 民 币 百 万 元"),
+      line(800, 140, "合 并 公 司"),
+      line(800, 160, "2024 年 度 2023 年 度 2024 年 度 2023 年 度"),
+      line(250, 220, "一 、 营 业 收 入"),
+      line(900, 220, "132,120 113,788 87,786 74,937"),
+      line(250, 260, "归 属 于 母 公 司 股 东 的 净 亏 损"),
+      line(900, 260, "(2,768) (8,190)"),
+    ));
+
+    expect(text.startsWith("合并及公司利润表\n")).toBe(true);
+    expect(extractFinancialColumns([text], {
+      fiscalYear: 2024,
+      presentation: "annual",
+    })).toMatchObject({
+      comparative: { "income.revenue": "113788" },
+    });
   });
 
   it("returns hybrid pages and auditable OCR metadata", async () => {
@@ -205,10 +227,66 @@ describe("CNINFO OCR adapter", () => {
     expect(Array.isArray(result)).toBe(false);
     if (Array.isArray(result)) throw new Error("Expected structured result");
     expect(result.pages[1]).toContain("金额单位为人民币百万元");
-    expect(result.pages[1]).toContain("合并利润表\n营 业 收 入 2 1,000 900");
+    expect(result.pages[1]).toContain(
+      "合并利润表\n金额单位为人民币百万元\n营 业 收 入 2 1,000 900",
+    );
     expect(renderPage).toHaveBeenCalledTimes(6);
     expect(recognize).toHaveBeenCalledTimes(12);
     expect(terminate).toHaveBeenCalledOnce();
+  });
+
+  it("recovers a missing statement unit with sparse-text OCR", async () => {
+    const recognize = vi.fn(async (
+      _image: Uint8Array,
+      mode?: "layout" | "single-block" | "sparse-text",
+    ) => mode === "layout"
+      ? {
+          blocks: blocks(
+            line(250, 100, "2023 年度合并及公司利润表"),
+            line(250, 220, "一、营业收入"),
+            line(900, 220, "113,741 46,305 74,937 32,213"),
+            line(250, 260, "归属于母公司股东的净亏损"),
+            line(900, 260, "(8,168) (37,356)"),
+            line(250, 280, "其他项目".repeat(400)),
+            line(250, 300, "基本每股亏损（人民币元/股）"),
+          ),
+        }
+      : mode === "sparse-text"
+        ? { text: "除特别注明外，金额单位为人民币脱刊万元" }
+        : { text: "中国东方航空股份有限公司 2023 年度利润表" });
+    const extractor = createCninfoOcrTextExtractor({
+      pageNumbers: [1],
+      extractTextImplementation: async () => [""],
+      renderPageImplementation: async () => new Uint8Array([1]),
+      cropHeaderImplementation: async (image) => image,
+      createRecognizerImplementation: async () => ({
+        engine: "fake-ocr",
+        version: "1.2.3",
+        language: "chi_sim",
+        recognize,
+        terminate: async () => undefined,
+      }),
+    });
+
+    const result = await extractor(new Uint8Array([1, 2, 3]));
+    if (Array.isArray(result)) throw new Error("Expected structured result");
+    expect(extractFinancialColumns(result.pages, {
+      fiscalYear: 2023,
+      presentation: "annual",
+    })).toMatchObject({
+      current: {
+        "income.revenue": "113741",
+        "income.netProfitParent": "-8168",
+      },
+      currentEvidence: {
+        "income.revenue": { scale: "1000000" },
+        "income.netProfitParent": { scale: "1000000" },
+      },
+    });
+    expect(recognize).toHaveBeenCalledWith(
+      expect.any(Uint8Array),
+      "sparse-text",
+    );
   });
 
   it("recovers a securities income statement from complementary OCR modes", async () => {

@@ -28,7 +28,7 @@ import {
 
 const PROVIDER_ID = "eastmoney-direct";
 const UPSTREAM_SOURCE_ID = "eastmoney";
-const MAPPING_VERSION = "eastmoney@1.4.0";
+const MAPPING_VERSION = "eastmoney@1.5.0";
 const QUOTE_ENDPOINT = "https://push2.eastmoney.com/api/qt/stock/get";
 const HISTORY_ENDPOINT =
   "https://push2his.eastmoney.com/api/qt/stock/kline/get";
@@ -62,6 +62,38 @@ interface FinancialField {
   rawField: string;
   concept: ConceptId;
   attribution?: "parent" | "all-shareholders";
+}
+
+function datePart(value: string): string {
+  return value.slice(0, 10);
+}
+
+function financialReportingVersion(
+  reportDateValue: string,
+  noticeDateValue: string,
+): {
+  kind: "original-filing" | "later-comparative";
+  sourcePeriodEndDate: string;
+} {
+  const reportDate = datePart(reportDateValue);
+  const noticeDate = datePart(noticeDateValue);
+  const reportYear = Number(reportDate.slice(0, 4));
+  const noticeYear = Number(noticeDate.slice(0, 4));
+  const monthDay = reportDate.slice(5);
+  const originalNoticeYear = monthDay === "12-31"
+    ? reportYear + 1
+    : reportYear;
+  if (noticeYear <= originalNoticeYear) {
+    return {
+      kind: "original-filing",
+      sourcePeriodEndDate: reportDate,
+    };
+  }
+  const sourceYear = monthDay === "12-31" ? noticeYear - 1 : noticeYear;
+  return {
+    kind: "later-comparative",
+    sourcePeriodEndDate: `${sourceYear}-${monthDay}`,
+  };
 }
 
 const MARKET_CONCEPTS = new Set<ConceptId>([
@@ -1122,6 +1154,10 @@ export class EastmoneyProvider implements SourceProvider {
             throw new Error("Eastmoney report availability is missing");
           }
           legalName = asString(row["SECURITY_NAME_ABBR"]) ?? legalName;
+          const reportingVersion = financialReportingVersion(
+            reportDate,
+            noticeDate,
+          );
           rawSnapshots.push(snapshot);
           for (const field of financialFields[query.reportName]) {
             const requirement = query.requirements.find(
@@ -1161,6 +1197,7 @@ export class EastmoneyProvider implements SourceProvider {
                   : { attribution: field.attribution }),
                 currency: "CNY",
               },
+              reportingVersion,
               availability: noticeAvailability(noticeDate, context.now),
               provenance: {
                 providerId: this.providerId,
@@ -1171,11 +1208,21 @@ export class EastmoneyProvider implements SourceProvider {
                 rawField: field.rawField,
                 extractionMethod: "api",
                 fetchedAt: context.now,
-                transformations: [{
-                  transformId: "notice-date-end-of-day",
-                  version: "1.0.0",
-                  detail: "Treat NOTICE_DATE as available at end of day",
-                }],
+                transformations: [
+                  ...(reportingVersion.kind === "later-comparative"
+                    ? [{
+                        transformId: "historical-comparative-record",
+                        version: "1.0.0",
+                        detail:
+                          `Classify REPORT_DATE ${datePart(reportDate)} published on ${datePart(noticeDate)} as the comparison column of the ${reportingVersion.sourcePeriodEndDate} filing`,
+                      }]
+                    : []),
+                  {
+                    transformId: "notice-date-end-of-day",
+                    version: "1.0.0",
+                    detail: "Treat NOTICE_DATE as available at end of day",
+                  },
+                ],
               },
             }));
           }

@@ -1,5 +1,8 @@
 # Client Financial Context 1.0.0
 
+This legacy shape is superseded by Client Financial Context 1.1.0, which
+preserves the FactSet knowledge cutoff and post-disclosure evidence.
+
 `@verified-financial/client-context` is the shared boundary between a frozen
 `VerifiedFactSet` and LLM-facing clients such as Dexter and AI Berkshire.
 It formats data for consumption; it does not fetch, map, calculate, or verify

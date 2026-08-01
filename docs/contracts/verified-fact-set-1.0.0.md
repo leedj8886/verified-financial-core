@@ -1,5 +1,9 @@
 # VerifiedFactSet 1.0.0 Contract
 
+This is the legacy point-in-time contract. It remains readable for persisted
+FactSets. New producers emit 1.1.0; see
+[`verified-fact-set-1.1.0.md`](verified-fact-set-1.1.0.md).
+
 `VerifiedFactSet` is the frozen handoff between the Gateway and downstream
 consumers such as Dexter, AI Berkshire, MCP tools, and Research CI.
 
@@ -41,7 +45,8 @@ concept scope, canonical unit, period kind, and verification usability.
 
 ## Compatibility policy
 
-- Producers emit exactly `schemaVersion: "1.0.0"`.
+- Legacy producers emitted exactly `schemaVersion: "1.0.0"`; current producers
+  emit 1.1.0.
 - Consumers reject unknown schema versions instead of guessing compatibility.
 - Unknown top-level fields are rejected.
 - A breaking field, meaning, or invariant change requires a new wire version.

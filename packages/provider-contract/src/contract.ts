@@ -86,13 +86,32 @@ export const ProviderRequestSchema = z.object({
   instrument: InstrumentSchema,
   requirements: z.array(FactRequirementSchema).min(1),
   asOf: z.string().datetime({ offset: true }),
+  knowledgeAsOf: z.string().datetime({ offset: true }).optional(),
   offline: z.boolean(),
+}).superRefine((request, context) => {
+  if (
+    request.knowledgeAsOf !== undefined
+    && Date.parse(request.knowledgeAsOf) < Date.parse(request.asOf)
+  ) {
+    context.addIssue({
+      code: "custom",
+      path: ["knowledgeAsOf"],
+      message: "knowledgeAsOf cannot be earlier than asOf",
+    });
+  }
 });
 export interface ProviderRequest {
   instrument: Instrument;
   requirements: FactRequirement[];
   asOf: string;
+  knowledgeAsOf?: string | undefined;
   offline: boolean;
+}
+
+export function providerKnowledgeAsOf(
+  request: Pick<ProviderRequest, "asOf" | "knowledgeAsOf">,
+): string {
+  return request.knowledgeAsOf ?? request.asOf;
 }
 
 export const ProviderBatchSchema = z.object({

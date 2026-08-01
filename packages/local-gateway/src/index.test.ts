@@ -38,7 +38,7 @@ describe("local Gateway runtime", () => {
     const local = createLocalGateway(directory, []);
     try {
       expect(local.gateway.doctor()).toMatchObject({
-        schemaVersion: "1.0.0",
+        schemaVersion: "1.1.0",
         providers: [],
         storage: {
           databasePath: join(directory, "metadata.sqlite"),

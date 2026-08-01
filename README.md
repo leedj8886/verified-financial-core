@@ -17,7 +17,7 @@ financial-data layer.
 Implemented:
 
 - canonical schema and concept registry;
-- frozen `VerifiedFactSet` 1.0.0 wire contract with Zod and draft-07 JSON
+- frozen `VerifiedFactSet` 1.1.0 wire contract with Zod and draft-07 JSON
   Schema exports;
 - compatibility, source-independence, verification, derivations, and
   deterministic FactSet assembly;
@@ -96,7 +96,7 @@ carry concept-registry, validation-rule, Provider mapping, and formula
 versions in `lineageVersions`.
 
 See the
-[VerifiedFactSet 1.0.0 compatibility contract](docs/contracts/verified-fact-set-1.0.0.md).
+[VerifiedFactSet 1.1.0 compatibility contract](docs/contracts/verified-fact-set-1.1.0.md).
 
 ## CLI
 
@@ -198,7 +198,7 @@ const context = buildClientFinancialContext(factSet, {
 Facts below the declared threshold are moved to `blockedFacts` without their
 numeric value. Consumers must honor `gate.passed` before publishing or making
 an investment claim. See the
-[Client Financial Context 1.0.0 contract](docs/contracts/client-context-1.0.0.md).
+[Client Financial Context 1.1.0 contract](docs/contracts/client-context-1.1.0.md).
 
 Request facts:
 
@@ -209,6 +209,26 @@ pnpm --silent ah-context facts 600519.SH \
   --as-of 2026-07-27 \
   --format json
 ```
+
+`--as-of` is the effective observation or valuation time. By default it is
+also the information cutoff, so the request is strict point-in-time. For a
+post-disclosure reconstruction, keep `--as-of` fixed and set an explicit later
+`--knowledge-as-of`:
+
+```bash
+pnpm --silent ah-context facts 600519.SH \
+  --concept income.revenue \
+  --period 2024Q2TTM \
+  --as-of 2024-08-30 \
+  --knowledge-as-of 2024-09-30 \
+  --format json
+```
+
+The resulting `temporalContext.mode` is `post-disclosure`. Each returned Fact
+records its latest evidence time, whether all evidence was known at the
+effective date, and the Observation IDs published afterward. Omitting
+`--knowledge-as-of` preserves the original fail-closed behavior and emits
+`point-in-time`.
 
 Request the last unadjusted daily close available on a historical date:
 
@@ -226,9 +246,9 @@ preceding Friday for a weekend or the last close before a suspension).
 Mainland daily closes are conservatively available from 15:30 +08:00 and Hong
 Kong closes from 16:30 +08:00. Same-calendar-day requests continue to use the
 current quote path. Historical market cap is unavailable unless the official
-CNINFO point-in-time share ledger contains a share count both effective and
-disclosed by `asOf`. The Gateway will not multiply a historical close by the
-latest share count.
+CNINFO share ledger contains a share count effective by `asOf` and disclosed
+by `knowledgeAsOf` (which defaults to `asOf`). The Gateway will not multiply a
+historical close by the latest share count.
 
 Request the implemented cash dividend per share assigned to a fiscal year:
 
@@ -299,12 +319,15 @@ Image-only primary statements do not fall back to annual-report summaries or
 notes. TTM ROE, EPS-based P/E, and other unsupported non-additive ratios remain
 fail-closed.
 
-For a period restated by a later filing, verification uses the latest
-publication from each upstream source while retaining all superseded
-Observation IDs in lineage. CNINFO YTD reports expose both the current and
-comparative columns so TTM uses the later filing's comparable prior period.
-Any discrepancy above 5% between independent sources fails closed, including
-when one source is official; it cannot feed a derived fact until resolved.
+Financial observations distinguish the original filing, a later filing's
+comparative column, and an explicitly revised filing through
+`reportingVersion`. CNINFO also fetches the next comparable filing when it was
+available by `knowledgeAsOf`; Eastmoney historical rows are classified from
+their `REPORT_DATE` and later `NOTICE_DATE`. Verification compares only the
+same reporting version, while the Gateway selects the newest known version for
+each TTM input and retains older versions in lineage. A failed newest version
+does not fall back to an older value. Any discrepancy above 5% between
+independent sources still fails closed, including when one source is official.
 
 ## Packages
 
