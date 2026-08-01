@@ -1,7 +1,10 @@
 import { execFileSync } from "node:child_process";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
-import { createLocalGateway } from "../packages/local-gateway/dist/index.js";
+import {
+  createDefaultProviders,
+  createLocalGateway,
+} from "../packages/local-gateway/dist/index.js";
 import type {
   FactPeriodSelector,
   FactRequest,
@@ -312,7 +315,26 @@ const latestMarketAsOf = asOfOption(
   "--latest-market-as-of",
   latestFinancialAsOf,
 );
-const local = createLocalGateway(dataDirectory);
+const cninfoOcrEnabled = process.argv.includes("--cninfo-ocr");
+const providerTimeoutMs = Number(
+  optionValues("--provider-timeout-ms")[0]
+    ?? (cninfoOcrEnabled ? "600000" : "30000"),
+);
+if (!Number.isFinite(providerTimeoutMs) || providerTimeoutMs <= 0) {
+  throw new Error(`Invalid --provider-timeout-ms: ${providerTimeoutMs}`);
+}
+const providers = cninfoOcrEnabled
+  ? createDefaultProviders({
+      cninfo: {
+        extractTextImplementation: (await import(
+          "../packages/provider-cninfo-ocr/dist/index.js"
+        )).createCninfoOcrTextExtractor(),
+      },
+    })
+  : createDefaultProviders();
+const local = createLocalGateway(dataDirectory, providers, {
+  providerTimeoutMs,
+});
 const baselinePeriod: FactPeriodSelector = {
   fiscalYear: 2024,
   fiscalQuarter: 2,
@@ -567,6 +589,8 @@ try {
   }
   const output = {
     generatedAt: new Date().toISOString(),
+    cninfoOcrEnabled,
+    providerTimeoutMs,
     coreCommit: currentCommit(),
     coreDirty: repositoryDirty(),
     baselineFinancialAsOf,

@@ -1,6 +1,9 @@
 import { join } from "node:path";
 import { BaiduProvider } from "@verified-financial/provider-baidu";
-import { CninfoProvider } from "@verified-financial/provider-cninfo";
+import {
+  CninfoProvider,
+  type CninfoProviderOptions,
+} from "@verified-financial/provider-cninfo";
 import type { SourceProvider } from "@verified-financial/provider-contract";
 import { EastmoneyProvider } from "@verified-financial/provider-eastmoney";
 import { HkexProvider } from "@verified-financial/provider-hkex";
@@ -16,10 +19,20 @@ export interface LocalGateway {
   close(): void;
 }
 
-export function createDefaultProviders(): SourceProvider[] {
+export interface DefaultProviderOptions {
+  cninfo?: CninfoProviderOptions;
+}
+
+export interface LocalGatewayOptions {
+  providerTimeoutMs?: number;
+}
+
+export function createDefaultProviders(
+  options: DefaultProviderOptions = {},
+): SourceProvider[] {
   return [
     new EastmoneyProvider(),
-    new CninfoProvider(),
+    new CninfoProvider(options.cninfo),
     new HkexProvider(),
     new TencentProvider(),
     new BaiduProvider(),
@@ -29,6 +42,7 @@ export function createDefaultProviders(): SourceProvider[] {
 export function createLocalGateway(
   dataDirectory: string,
   providers: SourceProvider[] = createDefaultProviders(),
+  options: LocalGatewayOptions = {},
 ): LocalGateway {
   const metadata = new MetadataStore(join(dataDirectory, "metadata.sqlite"));
   const snapshots = new ContentAddressedSnapshotStore(
@@ -40,6 +54,9 @@ export function createLocalGateway(
       providers,
       metadata,
       snapshots,
+      ...(options.providerTimeoutMs === undefined
+        ? {}
+        : { providerTimeoutMs: options.providerTimeoutMs }),
     }),
     close() {
       metadata.close();

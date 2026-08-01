@@ -53,4 +53,17 @@ describe("local Gateway runtime", () => {
       rmSync(directory, { recursive: true, force: true });
     }
   });
+
+  it("forwards an explicit Provider timeout budget", () => {
+    const directory = mkdtempSync(join(tmpdir(), "verified-local-gateway-"));
+    const local = createLocalGateway(directory, [], {
+      providerTimeoutMs: 123_456,
+    });
+    try {
+      expect(local.gateway).toHaveProperty("providerTimeoutMs", 123_456);
+    } finally {
+      local.close();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
 });

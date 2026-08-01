@@ -25,6 +25,8 @@ Implemented:
 - runtime-validated Provider contract;
 - token-free CNINFO/HKEX official-filing, Eastmoney, Tencent, and Baidu
   Providers;
+- optional local CNINFO OCR adapter for image-only Chinese financial
+  statements, with page-level evidence and persisted OCR text snapshots;
 - traceable, unadjusted Tencent/Eastmoney daily closes for historical `asOf`
   queries;
 - annual A/H cash dividends per share with official CNINFO/HKEX arbitration,
@@ -122,6 +124,53 @@ try {
 
 The shared runtime owns the default Provider registration and local snapshot
 stores. Client adapters must not recreate that data-routing layer.
+
+### Optional CNINFO OCR
+
+The default Gateway remains text-only and does not load a Chinese OCR model or
+native Canvas runtime. Consumers that need image-only CNINFO statements can
+opt in through the separate TypeScript package:
+
+```ts
+import {
+  createDefaultProviders,
+  createLocalGateway,
+} from "@verified-financial/local-gateway";
+import {
+  createCninfoOcrTextExtractor,
+} from "@verified-financial/provider-cninfo-ocr";
+
+const providers = createDefaultProviders({
+  cninfo: {
+    extractTextImplementation: createCninfoOcrTextExtractor(),
+  },
+});
+const local = createLocalGateway("./data", providers);
+```
+
+The adapter first runs normal PDF text extraction and OCRs only a bounded blank
+page run that looks like an embedded financial-statement section. It renders
+locally at 3x scale, uses the bundled simplified-Chinese Tesseract model, and
+reconstructs table rows from OCR coordinates. OCR page numbers, engine version,
+language, transformations, and recognized text are preserved in lineage and
+content-addressed snapshots. Facts still pass through the normal independent
+source comparison and fail closed on conflicts. Because OCR is CPU-intensive,
+enable it only for workflows that need image-only statement coverage.
+
+Industry audits can opt in with `--cninfo-ocr`; use a dedicated data directory
+when comparing OCR and text-only runs:
+
+```bash
+pnpm audit:industry -- \
+  --cninfo-ocr \
+  --data-dir /tmp/verified-financial-ocr-audit \
+  --output work/industry-coverage-audit-ocr.json \
+  --industry "航空机场=/absolute/path/to/aviation-primary.json"
+```
+
+OCR audits default to a ten-minute Provider budget instead of the normal
+30-second budget. Override it explicitly with `--provider-timeout-ms` when
+running on slower or faster hardware.
 
 Dexter and other LLM clients convert the complete FactSet through the shared
 fail-closed adapter:

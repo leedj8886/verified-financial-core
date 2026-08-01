@@ -26,7 +26,7 @@ import { extractText, getDocumentProxy } from "unpdf";
 
 const PROVIDER_ID = "cninfo-direct";
 const UPSTREAM_SOURCE_ID = "cninfo";
-const MAPPING_VERSION = "cninfo@1.7.0";
+const MAPPING_VERSION = "cninfo@1.8.0";
 const API_BASE = "https://www.cninfo.com.cn/new/";
 const WEBAPI_BASE = "https://webapi.cninfo.com.cn/";
 const PDF_BASE = "https://static.cninfo.com.cn/";
@@ -95,9 +95,21 @@ interface FilingQuery {
   requirements: FactRequirement[];
 }
 
+export interface PdfOcrMetadata {
+  engine: string;
+  version: string;
+  language: string;
+  pageNumbers: number[];
+}
+
+export interface PdfTextExtractionResult {
+  pages: string[];
+  ocr?: PdfOcrMetadata;
+}
+
 export type PdfTextExtractor = (
   data: Uint8Array<ArrayBuffer>,
-) => Promise<string[]>;
+) => Promise<string[] | PdfTextExtractionResult>;
 
 export interface CninfoProviderOptions {
   fetchImplementation?: FetchImplementation;
@@ -1414,6 +1426,10 @@ export class CninfoProvider implements SourceProvider {
     context: ProviderContext,
   ): Promise<{
     pages?: string[];
+    ocr?: {
+      metadata: PdfOcrMetadata;
+      snapshot: StoredSnapshotRef;
+    };
     issue?: ProviderIssue;
     snapshot: StoredSnapshotRef;
     sourceUrl: string;
@@ -1439,8 +1455,52 @@ export class CninfoProvider implements SourceProvider {
     const extractor = this.options.extractTextImplementation
       ?? defaultExtractText;
     try {
+      const extracted = await extractor(bytes);
+      const result = Array.isArray(extracted)
+        ? { pages: extracted }
+        : extracted;
+      const pageNumbers = result.ocr === undefined
+        ? []
+        : [...new Set(result.ocr.pageNumbers)]
+          .filter((pageNumber) =>
+            Number.isInteger(pageNumber)
+            && pageNumber >= 1
+            && pageNumber <= result.pages.length
+          )
+          .sort((left, right) => left - right);
+      const ocr = result.ocr === undefined || pageNumbers.length === 0
+        ? undefined
+        : {
+            ...result.ocr,
+            pageNumbers,
+          };
+      const ocrSnapshot = ocr === undefined
+        ? undefined
+        : await context.snapshots.put({
+            providerId: this.providerId,
+            sourceUrl: `${sourceUrl}#ocr-text`,
+            mediaType: "text",
+            fetchedAt: context.now,
+            body: JSON.stringify({
+              format: "verified-financial-cninfo-ocr/v1",
+              sourceSnapshotId: snapshot.snapshotId,
+              ...ocr,
+              pages: pageNumbers.map((pageNumber) => ({
+                pageNumber,
+                text: result.pages[pageNumber - 1]!,
+              })),
+            }),
+          });
       return {
-        pages: await extractor(bytes),
+        pages: result.pages,
+        ...(ocr === undefined || ocrSnapshot === undefined
+          ? {}
+          : {
+              ocr: {
+                metadata: ocr,
+                snapshot: ocrSnapshot,
+              },
+            }),
         snapshot,
         sourceUrl,
       };
@@ -1777,6 +1837,9 @@ export class CninfoProvider implements SourceProvider {
         const announcement = found.announcement;
         const filing = await this.readFiling(announcement, context);
         rawSnapshots.push(filing.snapshot);
+        if (filing.ocr !== undefined) {
+          rawSnapshots.push(filing.ocr.snapshot);
+        }
         if (filing.issue !== undefined || filing.pages === undefined) {
           issues.push(filing.issue ?? {
             providerId: this.providerId,
@@ -1818,7 +1881,8 @@ export class CninfoProvider implements SourceProvider {
               }),
               providerId: this.providerId,
               upstreamSourceId: this.upstreamSourceId,
-              rawSnapshotId: filing.snapshot.snapshotId,
+              rawSnapshotId: filing.ocr?.snapshot.snapshotId
+                ?? filing.snapshot.snapshotId,
               rawField: field.rawField,
               rawValue: null,
               reasonCode: "UNMAPPED_SOURCE_FIELD",
@@ -1847,6 +1911,13 @@ export class CninfoProvider implements SourceProvider {
             periodQuery,
             field.statement === "balance" ? "instant" : "duration",
           );
+          const usesOcr = evidence !== undefined
+            && filing.ocr?.metadata.pageNumbers.includes(
+              evidence.pageNumber,
+            ) === true;
+          const evidenceSnapshot = usesOcr
+            ? filing.ocr!.snapshot
+            : filing.snapshot;
           observations.push(ObservationSchema.parse({
             observationId: stableId("obs", {
               providerId: this.providerId,
@@ -1882,19 +1953,41 @@ export class CninfoProvider implements SourceProvider {
               upstreamSourceId: this.upstreamSourceId,
               sourceType: "official",
               documentId: announcement.announcementId,
-              sourceUrl: filing.sourceUrl,
-              rawSnapshotId: filing.snapshot.snapshotId,
+              sourceUrl: evidenceSnapshot.sourceUrl,
+              rawSnapshotId: evidenceSnapshot.snapshotId,
               rawField: column === "current"
                 ? field.rawField
                 : `${field.rawField}.上年同期`,
               extractionMethod: "pdf",
               fetchedAt: context.now,
               transformations: [
-                {
-                  transformId: "pdf-text-extract",
-                  version: "1.0.0",
-                  detail: "Extract text with unpdf using bundled CJK maps",
-                },
+                ...(usesOcr
+                  ? [
+                      {
+                        transformId: "pdf-page-render",
+                        version: "1.0.0",
+                        detail:
+                          `Render PDF page ${evidence!.pageNumber} from source snapshot ${filing.snapshot.snapshotId}`,
+                      },
+                      {
+                        transformId: "tesseract-ocr",
+                        version: filing.ocr!.metadata.version,
+                        detail:
+                          `Recognize PDF page ${evidence!.pageNumber} with ${filing.ocr!.metadata.engine} language ${filing.ocr!.metadata.language}`,
+                      },
+                      {
+                        transformId: "ocr-spatial-line-reconstruction",
+                        version: "1.0.0",
+                        detail:
+                          "Rebuild statement rows from OCR text boxes using vertical alignment and left-to-right column order",
+                      },
+                    ]
+                  : [{
+                      transformId: "pdf-text-extract",
+                      version: "1.0.0",
+                      detail:
+                        "Extract text with unpdf using bundled CJK maps",
+                    }]),
                 {
                   transformId: "consolidated-statement-column-match",
                   version: "4.0.0",

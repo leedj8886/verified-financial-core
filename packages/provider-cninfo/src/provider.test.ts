@@ -569,6 +569,54 @@ describe("CninfoProvider", () => {
     )).toBe(true);
   });
 
+  it("persists OCR text and links OCR-derived facts to that snapshot", async () => {
+    const fetchImplementation = vi.fn<FetchImplementation>(
+      async (input) => {
+        const url = new URL(String(input));
+        if (url.pathname.endsWith("/information/topSearch/query")) {
+          return new Response(await fixture("search-600519.json"));
+        }
+        if (url.pathname.endsWith("/hisAnnouncement/query")) {
+          return new Response(await fixture("annual-600519-2025.json"));
+        }
+        return new Response("%PDF-ocr-fixture");
+      },
+    );
+    const provider = new CninfoProvider({
+      fetchImplementation,
+      extractTextImplementation: async () => ({
+        pages: [await fixture("annual-600519-2025.txt")],
+        ocr: {
+          engine: "tesseract.js",
+          version: "7.0.0",
+          language: "chi_sim",
+          pageNumbers: [1],
+        },
+      }),
+      retries: 0,
+    });
+    const batch = parseProviderBatch(provider, await provider.fetch(request, {
+      signal: new AbortController().signal,
+      now: "2026-07-28T10:00:00+08:00",
+      snapshots,
+    }));
+
+    expect(batch.rawSnapshots.map((snapshot) => snapshot.mediaType))
+      .toEqual(["json", "json", "pdf", "text"]);
+    const ocrSnapshot = batch.rawSnapshots.at(-1)!;
+    expect(batch.observations).not.toHaveLength(0);
+    expect(batch.observations.every((observation) =>
+      observation.provenance.rawSnapshotId === ocrSnapshot.snapshotId
+      && observation.provenance.sourceUrl.endsWith("#ocr-text")
+      && observation.provenance.transformations.some((step) =>
+        step.transformId === "tesseract-ocr"
+      )
+      && observation.provenance.transformations.some((step) =>
+        step.transformId === "ocr-spatial-line-reconstruction"
+      )
+    )).toBe(true);
+  });
+
   it("preserves a typed statement diagnostic when the main table is absent", async () => {
     const fetchImplementation = vi.fn<FetchImplementation>(
       async (input) => {
