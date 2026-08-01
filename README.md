@@ -142,7 +142,9 @@ import {
 
 const providers = createDefaultProviders({
   cninfo: {
-    extractTextImplementation: createCninfoOcrTextExtractor(),
+    extractTextImplementation: createCninfoOcrTextExtractor({
+      cacheDirectory: "./data/ocr-cache",
+    }),
   },
 });
 const local = createLocalGateway("./data", providers);
@@ -157,6 +159,13 @@ content-addressed snapshots. Facts still pass through the normal independent
 source comparison and fail closed on conflicts. Because OCR is CPU-intensive,
 enable it only for workflows that need image-only statement coverage.
 
+`cacheDirectory` is optional. When present, the adapter persists only the OCR
+page replacements in a content-addressed cache keyed by PDF bytes, OCR scale,
+selected pages, cache schema, and engine/model identity. Corrupt or stale cache
+entries are ignored and regenerated. Custom recognizers must also set a stable
+`cacheIdentity` to enable persistent caching; the bundled Tesseract recognizer
+sets this automatically.
+
 Industry audits can opt in with `--cninfo-ocr`; use a dedicated data directory
 when comparing OCR and text-only runs:
 
@@ -169,8 +178,9 @@ pnpm audit:industry -- \
 ```
 
 OCR audits default to a ten-minute Provider budget instead of the normal
-30-second budget. Override it explicitly with `--provider-timeout-ms` when
-running on slower or faster hardware.
+30-second budget and persist reusable OCR results under
+`<data-dir>/ocr-cache`. Override the budget explicitly with
+`--provider-timeout-ms` when running on slower or faster hardware.
 
 Dexter and other LLM clients convert the complete FactSet through the shared
 fail-closed adapter:

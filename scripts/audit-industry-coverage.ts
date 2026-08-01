@@ -329,7 +329,9 @@ const providers = cninfoOcrEnabled
       cninfo: {
         extractTextImplementation: (await import(
           "../packages/provider-cninfo-ocr/dist/index.js"
-        )).createCninfoOcrTextExtractor(),
+        )).createCninfoOcrTextExtractor({
+          cacheDirectory: resolve(dataDirectory, "ocr-cache"),
+        }),
       },
     })
   : createDefaultProviders();

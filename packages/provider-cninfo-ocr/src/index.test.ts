@@ -1,3 +1,6 @@
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
   createCninfoOcrTextExtractor,
@@ -189,5 +192,68 @@ describe("CNINFO OCR adapter", () => {
     expect(renderPage).toHaveBeenCalledTimes(6);
     expect(recognize).toHaveBeenCalledTimes(12);
     expect(terminate).toHaveBeenCalledOnce();
+  });
+
+  it("reuses content-addressed OCR results across extractor instances", async () => {
+    const cacheDirectory = await mkdtemp(join(tmpdir(), "cninfo-ocr-cache-"));
+    const basePages = [
+      "2023 年年度报告",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "",
+      "2023 年度财务报表附注",
+    ];
+    const renderPage = vi.fn(async (
+      _data: Uint8Array<ArrayBuffer>,
+      pageNumber: number,
+    ) => new Uint8Array([pageNumber]));
+    const recognize = vi.fn(async (image: Uint8Array) => ({
+      blocks: blocks(line(250, 300, `已 识 别 页 ${image[0]}`)),
+    }));
+    const terminate = vi.fn(async () => undefined);
+
+    try {
+      const firstExtractor = createCninfoOcrTextExtractor({
+        cacheDirectory,
+        cacheIdentity: "fake-ocr@1.2.3:chi_sim",
+        extractTextImplementation: async () => basePages,
+        renderPageImplementation: renderPage,
+        createRecognizerImplementation: async () => ({
+          engine: "fake-ocr",
+          version: "1.2.3",
+          language: "chi_sim",
+          recognize,
+          terminate,
+        }),
+      });
+      const firstResult = await firstExtractor(new Uint8Array([1, 2, 3]));
+
+      const secondRecognizer = vi.fn(async () => {
+        throw new Error("OCR must not run on a persistent cache hit");
+      });
+      const secondRenderer = vi.fn(async () => {
+        throw new Error("Rendering must not run on a persistent cache hit");
+      });
+      const secondExtractor = createCninfoOcrTextExtractor({
+        cacheDirectory,
+        cacheIdentity: "fake-ocr@1.2.3:chi_sim",
+        extractTextImplementation: async () => basePages,
+        renderPageImplementation: secondRenderer,
+        createRecognizerImplementation: secondRecognizer,
+      });
+      const secondResult = await secondExtractor(new Uint8Array([1, 2, 3]));
+
+      expect(secondResult).toEqual(firstResult);
+      expect(renderPage).toHaveBeenCalledTimes(6);
+      expect(recognize).toHaveBeenCalledTimes(6);
+      expect(terminate).toHaveBeenCalledOnce();
+      expect(secondRenderer).not.toHaveBeenCalled();
+      expect(secondRecognizer).not.toHaveBeenCalled();
+    } finally {
+      await rm(cacheDirectory, { recursive: true, force: true });
+    }
   });
 });

@@ -1,3 +1,6 @@
+import { createHash, randomUUID } from "node:crypto";
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import chiSim from "@tesseract.js-data/chi_sim";
 import type {
   PdfTextExtractionResult,
@@ -13,6 +16,8 @@ import {
 const DEFAULT_SCALE = 3;
 const DEFAULT_MINIMUM_BLANK_RUN_PAGES = 6;
 const DEFAULT_MAXIMUM_OCR_PAGES = 24;
+const DEFAULT_CACHE_IDENTITY = "tesseract.js@7.0.0:chi_sim";
+const OCR_CACHE_FORMAT = "verified-financial-cninfo-ocr-cache/v1";
 
 export interface OcrRecognition {
   text?: string;
@@ -41,9 +46,33 @@ export interface CninfoOcrTextExtractorOptions {
   minimumBlankRunPages?: number;
   maximumOcrPages?: number;
   pageNumbers?: readonly number[];
+  /** Persistent cache location. Disabled when omitted. */
+  cacheDirectory?: string;
+  /**
+   * Stable OCR engine/model identity used for cache invalidation. Required
+   * when cacheDirectory and a custom recognizer implementation are combined.
+   */
+  cacheIdentity?: string;
   extractTextImplementation?: PdfTextExtractor;
   renderPageImplementation?: RenderPageImplementation;
   createRecognizerImplementation?: () => Promise<OcrRecognizer>;
+}
+
+interface CachedOcrPage {
+  pageNumber: number;
+  text: string;
+}
+
+interface CachedOcrDocument {
+  format: typeof OCR_CACHE_FORMAT;
+  cacheIdentity: string;
+  scale: number;
+  pageCount: number;
+  requestedPageNumbers: number[];
+  engine: string;
+  version: string;
+  language: string;
+  pages: CachedOcrPage[];
 }
 
 interface PositionedLine {
@@ -407,6 +436,150 @@ function validExplicitPages(
     .slice(0, maximum);
 }
 
+function samePageNumbers(
+  left: readonly number[],
+  right: readonly number[],
+): boolean {
+  return left.length === right.length
+    && left.every((pageNumber, index) => pageNumber === right[index]);
+}
+
+function parseCachedOcrDocument(
+  value: unknown,
+  expected: Pick<
+    CachedOcrDocument,
+    "cacheIdentity" | "scale" | "pageCount" | "requestedPageNumbers"
+  >,
+): CachedOcrDocument | undefined {
+  const record = objectValue(value);
+  if (
+    record?.["format"] !== OCR_CACHE_FORMAT
+    || record["cacheIdentity"] !== expected.cacheIdentity
+    || record["scale"] !== expected.scale
+    || record["pageCount"] !== expected.pageCount
+    || typeof record["engine"] !== "string"
+    || typeof record["version"] !== "string"
+    || typeof record["language"] !== "string"
+    || !Array.isArray(record["requestedPageNumbers"])
+    || !record["requestedPageNumbers"].every(Number.isInteger)
+    || !samePageNumbers(
+      record["requestedPageNumbers"] as number[],
+      expected.requestedPageNumbers,
+    )
+    || !Array.isArray(record["pages"])
+  ) {
+    return undefined;
+  }
+  const pages: CachedOcrPage[] = [];
+  const seen = new Set<number>();
+  for (const pageValue of record["pages"]) {
+    const page = objectValue(pageValue);
+    const pageNumber = page?.["pageNumber"];
+    const text = page?.["text"];
+    if (
+      typeof pageNumber !== "number"
+      || !Number.isInteger(pageNumber)
+      || !expected.requestedPageNumbers.includes(pageNumber)
+      || seen.has(pageNumber)
+      || typeof text !== "string"
+      || text.length === 0
+    ) {
+      return undefined;
+    }
+    seen.add(pageNumber);
+    pages.push({ pageNumber, text });
+  }
+  return {
+    format: OCR_CACHE_FORMAT,
+    cacheIdentity: expected.cacheIdentity,
+    scale: expected.scale,
+    pageCount: expected.pageCount,
+    requestedPageNumbers: [...expected.requestedPageNumbers],
+    engine: record["engine"],
+    version: record["version"],
+    language: record["language"],
+    pages,
+  };
+}
+
+function ocrCacheKey(
+  data: Uint8Array<ArrayBuffer>,
+  cacheIdentity: string,
+  scale: number,
+  pageNumbers: readonly number[],
+): string {
+  const hash = createHash("sha256");
+  hash.update(data);
+  hash.update(JSON.stringify({
+    format: OCR_CACHE_FORMAT,
+    cacheIdentity,
+    scale,
+    pageNumbers,
+  }));
+  return hash.digest("hex");
+}
+
+function ocrCachePath(cacheDirectory: string, key: string): string {
+  return join(cacheDirectory, key.slice(0, 2), `${key}.json`);
+}
+
+async function readCachedOcrDocument(
+  cacheDirectory: string,
+  key: string,
+  expected: Parameters<typeof parseCachedOcrDocument>[1],
+): Promise<CachedOcrDocument | undefined> {
+  try {
+    const serialized = await readFile(ocrCachePath(cacheDirectory, key), "utf8");
+    return parseCachedOcrDocument(JSON.parse(serialized), expected);
+  } catch {
+    // A cache miss, stale schema, or corrupt file must never block extraction.
+    return undefined;
+  }
+}
+
+async function writeCachedOcrDocument(
+  cacheDirectory: string,
+  key: string,
+  document: CachedOcrDocument,
+): Promise<void> {
+  const shardDirectory = join(cacheDirectory, key.slice(0, 2));
+  const finalPath = ocrCachePath(cacheDirectory, key);
+  const temporaryPath = join(
+    shardDirectory,
+    `.${key}.${process.pid}.${randomUUID()}.tmp`,
+  );
+  try {
+    await mkdir(shardDirectory, { recursive: true });
+    await writeFile(temporaryPath, JSON.stringify(document));
+    await rename(temporaryPath, finalPath);
+  } catch {
+    // Cache persistence is an optimization; the verified result remains valid.
+    await rm(temporaryPath, { force: true }).catch(() => undefined);
+  }
+}
+
+function applyCachedOcrDocument(
+  pages: string[],
+  document: CachedOcrDocument,
+): PdfTextExtractionResult {
+  for (const page of document.pages) {
+    pages[page.pageNumber - 1] = page.text;
+  }
+  return {
+    pages,
+    ...(document.pages.length === 0
+      ? {}
+      : {
+          ocr: {
+            engine: document.engine,
+            version: document.version,
+            language: document.language,
+            pageNumbers: document.pages.map((page) => page.pageNumber),
+          },
+        }),
+  };
+}
+
 export function createCninfoOcrTextExtractor(
   options: CninfoOcrTextExtractorOptions = {},
 ): PdfTextExtractor {
@@ -416,6 +589,11 @@ export function createCninfoOcrTextExtractor(
     ?? createTesseractRecognizer;
   const scale = options.scale ?? DEFAULT_SCALE;
   const maximum = options.maximumOcrPages ?? DEFAULT_MAXIMUM_OCR_PAGES;
+  const cacheIdentity = options.cacheIdentity
+    ?? (options.createRecognizerImplementation === undefined
+      ? DEFAULT_CACHE_IDENTITY
+      : undefined);
+  const inFlight = new Map<string, Promise<CachedOcrDocument>>();
   return async (data): Promise<PdfTextExtractionResult> => {
     // PDF.js may transfer and detach its input buffer while extracting text.
     // Keep an independent copy for the later page-rendering pass.
@@ -429,48 +607,87 @@ export function createCninfoOcrTextExtractor(
       : validExplicitPages(options.pageNumbers, pages.length, maximum);
     if (pageNumbers.length === 0) return { pages };
 
-    const recognizer = await createRecognizer();
-    const recognizedPages: number[] = [];
-    try {
-      for (const pageNumber of pageNumbers) {
-        const image = await renderPage(renderData, pageNumber, scale);
-        const recognition = await recognizer.recognize(image, "layout");
-        const reconstructed = reconstructOcrPage(recognition.blocks);
-        let text = reconstructed.length > 0
-          ? reconstructed
-          : normalizeOcrNumericSeparators(recognition.text?.trim() ?? "");
-        if (
-          looksLikeConsolidatedIncomeStatement(text)
-          && statementUnit(text) === undefined
-        ) {
-          const supplemental = await recognizer.recognize(
-            image,
-            "single-block",
-          );
-          const unit = statementUnit(supplemental.text ?? "");
-          if (unit !== undefined) {
-            text = `金额单位为人民币${unit}\n${text}`;
-          }
-        }
-        if (text.length === 0) continue;
-        pages[pageNumber - 1] = text;
-        recognizedPages.push(pageNumber);
-      }
-    } finally {
-      await recognizer.terminate();
-    }
-    return {
-      pages,
-      ...(recognizedPages.length === 0
-        ? {}
-        : {
-            ocr: {
-              engine: recognizer.engine,
-              version: recognizer.version,
-              language: recognizer.language,
-              pageNumbers: recognizedPages,
-            },
-          }),
+    const effectiveCacheIdentity = cacheIdentity ?? "extractor-local";
+    const key = ocrCacheKey(
+      renderData,
+      effectiveCacheIdentity,
+      scale,
+      pageNumbers,
+    );
+    const expectedCache = {
+      cacheIdentity: effectiveCacheIdentity,
+      scale,
+      pageCount: pages.length,
+      requestedPageNumbers: pageNumbers,
     };
+    if (options.cacheDirectory !== undefined && cacheIdentity !== undefined) {
+      const cached = await readCachedOcrDocument(
+        options.cacheDirectory,
+        key,
+        expectedCache,
+      );
+      if (cached !== undefined) return applyCachedOcrDocument(pages, cached);
+    }
+
+    let recognitionPromise = inFlight.get(key);
+    const ownsRecognition = recognitionPromise === undefined;
+    if (recognitionPromise === undefined) {
+      recognitionPromise = (async () => {
+        const recognizer = await createRecognizer();
+        const recognizedPages: CachedOcrPage[] = [];
+        try {
+          for (const pageNumber of pageNumbers) {
+            const image = await renderPage(renderData, pageNumber, scale);
+            const recognition = await recognizer.recognize(image, "layout");
+            const reconstructed = reconstructOcrPage(recognition.blocks);
+            let text = reconstructed.length > 0
+              ? reconstructed
+              : normalizeOcrNumericSeparators(recognition.text?.trim() ?? "");
+            if (
+              looksLikeConsolidatedIncomeStatement(text)
+              && statementUnit(text) === undefined
+            ) {
+              const supplemental = await recognizer.recognize(
+                image,
+                "single-block",
+              );
+              const unit = statementUnit(supplemental.text ?? "");
+              if (unit !== undefined) {
+                text = `金额单位为人民币${unit}\n${text}`;
+              }
+            }
+            if (text.length === 0) continue;
+            recognizedPages.push({ pageNumber, text });
+          }
+        } finally {
+          await recognizer.terminate();
+        }
+        return {
+          format: OCR_CACHE_FORMAT,
+          cacheIdentity: effectiveCacheIdentity,
+          scale,
+          pageCount: pages.length,
+          requestedPageNumbers: [...pageNumbers],
+          engine: recognizer.engine,
+          version: recognizer.version,
+          language: recognizer.language,
+          pages: recognizedPages,
+        };
+      })();
+      inFlight.set(key, recognitionPromise);
+    }
+    try {
+      const recognized = await recognitionPromise;
+      if (
+        ownsRecognition
+        && options.cacheDirectory !== undefined
+        && cacheIdentity !== undefined
+      ) {
+        await writeCachedOcrDocument(options.cacheDirectory, key, recognized);
+      }
+      return applyCachedOcrDocument(pages, recognized);
+    } finally {
+      if (ownsRecognition) inFlight.delete(key);
+    }
   };
 }
