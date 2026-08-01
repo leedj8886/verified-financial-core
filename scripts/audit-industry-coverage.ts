@@ -99,6 +99,7 @@ function request(
   period: FactPeriodSelector,
   scope: AuditScope,
   knowledgeAsOf: string = asOf,
+  maxAgeSeconds = 0,
 ): FactRequest {
   const conceptIds = scope === "financial"
     ? ["income.revenue", "income.netProfitParent"] as const
@@ -113,7 +114,7 @@ function request(
     asOf,
     knowledgeAsOf,
     freshness: {
-      maxAgeSeconds: 0,
+      maxAgeSeconds,
       allowStaleOnProviderFailure: false,
       offline: false,
     },
@@ -278,17 +279,22 @@ if (industryInputs.length === 0) throw new Error("At least one --industry is req
 const dataDirectory = resolve(requiredOption("--data-dir"));
 const outputPath = resolve(requiredOption("--output"));
 const concurrency = Number(optionValues("--concurrency")[0] ?? "3");
+const freshnessMaxAgeSeconds = Number(
+  optionValues("--max-age-seconds")[0] ?? "0",
+);
 const transientRetries = Number(optionValues("--transient-retries")[0] ?? "2");
 const transientRetryDelayMs = Number(
   optionValues("--transient-retry-delay-ms")[0] ?? "1000",
 );
 if (
-  !Number.isInteger(transientRetries)
+  !Number.isFinite(freshnessMaxAgeSeconds)
+  || freshnessMaxAgeSeconds < 0
+  || !Number.isInteger(transientRetries)
   || transientRetries < 0
   || !Number.isFinite(transientRetryDelayMs)
   || transientRetryDelayMs < 0
 ) {
-  throw new Error("Invalid transient retry options");
+  throw new Error("Invalid freshness or transient retry options");
 }
 const amountCoverageThreshold = Number(
   optionValues("--amount-coverage-threshold")[0] ?? "0.8",
@@ -366,6 +372,7 @@ try {
           baselinePeriod,
           "financial",
           baselineFinancialAsOf,
+          freshnessMaxAgeSeconds,
         );
         const latestFinancialRequest = request(
           instrument,
@@ -373,18 +380,23 @@ try {
           latestPeriod,
           "financial",
           latestFinancialAsOf,
+          freshnessMaxAgeSeconds,
         );
         const baselineMarketRequest = request(
           instrument,
           baselineMarketAsOf,
           baselinePeriod,
           "market",
+          baselineMarketAsOf,
+          freshnessMaxAgeSeconds,
         );
         const latestMarketRequest = request(
           instrument,
           latestMarketAsOf,
           latestPeriod,
           "market",
+          latestMarketAsOf,
+          freshnessMaxAgeSeconds,
         );
         const [
           baselineFinancial,
@@ -476,11 +488,21 @@ try {
         ].every((value) => value !== null);
         const financialComplete = baselineFinancialComplete
           && latestFinancialComplete;
+        const independentlyFinancialComplete = [
+          independentlyCovered.baseline_revenue,
+          independentlyCovered.latest_revenue,
+          independentlyCovered.baseline_profit,
+          independentlyCovered.latest_profit,
+        ].every(Boolean);
         const baselineMarketComplete = values.baseline_market_cap !== null
           && hasStrictMarketCap(baselineMarket);
         const latestMarketComplete = values.latest_market_cap !== null
           && hasStrictMarketCap(latestMarket);
         const marketComplete = baselineMarketComplete && latestMarketComplete;
+        const independentlyMarketComplete = [
+          independentlyCovered.baseline_market_cap,
+          independentlyCovered.latest_market_cap,
+        ].every(Boolean);
         return {
           code: company.code,
           name: company.name,
@@ -490,10 +512,14 @@ try {
           baselineFinancialComplete,
           latestFinancialComplete,
           financialComplete,
+          independentlyFinancialComplete,
           baselineMarketComplete,
           latestMarketComplete,
           marketComplete,
+          independentlyMarketComplete,
           fullComplete: financialComplete && marketComplete,
+          independentlyFullComplete:
+            independentlyFinancialComplete && independentlyMarketComplete,
           baselineFinancialStatus: baselineFinancial.summary.overallStatus,
           latestFinancialStatus: latestFinancial.summary.overallStatus,
           baselineMarketStatus: baselineMarket.summary.overallStatus,
@@ -541,8 +567,8 @@ try {
     });
     const failedBaselineMetrics = metricCoverage.filter(({ metric }) =>
       metric === "baseline_revenue" || metric === "baseline_profit"
-    ).filter(({ amountCoverageRatio }) =>
-      amountCoverageRatio < amountCoverageThreshold
+    ).filter(({ independentAmountCoverageRatio }) =>
+      independentAmountCoverageRatio < amountCoverageThreshold
     );
     const unresolvedReasons = new Map<string, number>();
     const unresolvedReasonBuckets = new Map<string, number>();
@@ -567,14 +593,25 @@ try {
       financialCompanyCount: companyResults.filter((company) =>
         company.financialComplete
       ).length,
+      independentlyFinancialCompanyCount: companyResults.filter((company) =>
+        company.independentlyFinancialComplete
+      ).length,
       marketCompanyCount: companyResults.filter((company) =>
         company.marketComplete
+      ).length,
+      independentlyMarketCompanyCount: companyResults.filter((company) =>
+        company.independentlyMarketComplete
       ).length,
       fullCompanyCount: companyResults.filter((company) =>
         company.fullComplete
       ).length,
+      independentlyFullCompanyCount: companyResults.filter((company) =>
+        company.independentlyFullComplete
+      ).length,
       verificationGate: {
         status: failedBaselineMetrics.length === 0 ? "PASS" : "FAIL",
+        basis: "independent-amount-coverage",
+        minimumIndependentSources: 2,
         amountCoverageThreshold,
         failedMetrics: failedBaselineMetrics.map(({ metric }) => metric),
       },
@@ -598,6 +635,7 @@ try {
     generatedAt: new Date().toISOString(),
     cninfoOcrEnabled,
     providerTimeoutMs,
+    freshnessMaxAgeSeconds,
     coreCommit: currentCommit(),
     coreDirty: repositoryDirty(),
     baselineFinancialAsOf,

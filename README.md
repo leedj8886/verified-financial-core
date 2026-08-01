@@ -180,7 +180,17 @@ pnpm audit:industry -- \
 OCR audits default to a ten-minute Provider budget instead of the normal
 30-second budget and persist reusable OCR results under
 `<data-dir>/ocr-cache`. Override the budget explicitly with
-`--provider-timeout-ms` when running on slower or faster hardware.
+`--provider-timeout-ms` when running on slower or faster hardware. The audit
+gate evaluates baseline revenue and profit using independently corroborated
+amount coverage, not merely usable single-source coverage. Reports include
+separate usable and independently corroborated company counts.
+
+Audit requests default to `--max-age-seconds 0` for a fresh upstream run. Set
+`--max-age-seconds` to reuse matching successful FactSets when recalculating
+the report or retrying only the companies that previously failed. A later
+`--baseline-financial-as-of` combined with an earlier
+`--baseline-market-as-of` produces a post-disclosure reconstruction while
+keeping historical prices and share counts at the original valuation date.
 
 Dexter and other LLM clients convert the complete FactSet through the shared
 fail-closed adapter:
