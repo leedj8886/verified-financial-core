@@ -37,6 +37,35 @@ describe("CNINFO OCR adapter", () => {
     ])).toEqual([6, 7, 8, 9, 10, 11]);
   });
 
+  it("selects statement pages whose text layer contains only page counters", () => {
+    expect(findOcrCandidatePages([
+      "第九节 财务报告\n二、财务报表",
+      "目录\n（一）合并资产负债表 第 2 页\n（三）合并利润表 第 4 页",
+      "审阅报告",
+      "第 2 页 共 153 页",
+      "第 3 页 共 153 页",
+      "第 4 页 共 153 页",
+      "第 5 页 共 153 页",
+      "第 6 页 共 153 页",
+      "第 7 页 共 153 页",
+      "财务报表附注 2024 年 1-6 月",
+    ])).toEqual([4, 5, 6, 7, 8, 9]);
+  });
+
+  it("does not OCR low-information front matter without statement anchors", () => {
+    expect(findOcrCandidatePages([
+      "2023 年年度报告",
+      "006 2023 68,906,236.24 4,827,256,868",
+      "007 2023",
+      "008 2023 289.8",
+      "009 2023 90",
+      "010 2023 6,243.07 1,046.03",
+      "011 2023 6,000 ETF REIT",
+      "012 2023 6,670 700 AI",
+      "公司治理及业务回顾正文。这里开始正常的可提取文本。",
+    ])).toEqual([]);
+  });
+
   it("reconstructs split label and amount columns by vertical position", () => {
     const text = reconstructOcrPage(blocks(
       line(800, 100, "合 并 利 润 表"),

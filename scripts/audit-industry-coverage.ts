@@ -186,6 +186,7 @@ function reasonBucket(reason: string): string {
     reason.includes(":STATEMENT_NOT_FOUND")
     || reason.includes(":STATEMENT_IMAGE_ONLY")
     || reason.includes(":TEXT_ENCODING_UNUSABLE")
+    || reason.includes(":OCR_TEXT_UNUSABLE")
     || reason.includes(":COLUMN_LAYOUT_AMBIGUOUS")
     || reason.includes(":LABEL_NOT_FOUND")
   ) {

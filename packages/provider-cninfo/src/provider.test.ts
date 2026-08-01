@@ -226,6 +226,32 @@ describe("CninfoProvider", () => {
     });
   });
 
+  it("maps parent profit labels that spell out owners or shareholders", () => {
+    const extraction = extractFinancialColumns([
+      [
+        "招商证券股份有限公司",
+        "合并利润表",
+        "2023 年度",
+        "单位：人民币元",
+        "项目 本期发生额 上期发生额",
+        "一、营业总收入 19,821,213,073.58 19,219,229,958.91",
+        "五、净利润 8,769,086,837.42 8,077,129,934.88",
+        "1.归属于母公司所有者（或股东）的净利润 8,763,959,184.96 8,070,242,869.23",
+        "母公司利润表",
+      ].join("\n"),
+    ], {
+      fiscalYear: 2023,
+      presentation: "annual",
+    });
+
+    expect(extraction.current["income.netProfitParent"]).toBe(
+      "8763959184.96",
+    );
+    expect(extraction.comparative["income.netProfitParent"]).toBe(
+      "8070242869.23",
+    );
+  });
+
   it("extracts China Southern interim rows after an inline note column", async () => {
     const extraction = extractFinancialColumns([
       await fixture("china-southern-2023h1.txt"),
@@ -569,6 +595,102 @@ describe("CninfoProvider", () => {
     )).toBe(true);
   });
 
+  it("prefers the A-share full report over a later H-share announcement", async () => {
+    const downloadedPaths: string[] = [];
+    const fetchImplementation = vi.fn<FetchImplementation>(
+      async (input) => {
+        const url = new URL(String(input));
+        if (url.pathname.endsWith("/information/topSearch/query")) {
+          return new Response(JSON.stringify([{
+            code: "600685",
+            orgId: "gssh0600685",
+            zwjc: "中船防务",
+          }]));
+        }
+        if (url.pathname.endsWith("/hisAnnouncement/query")) {
+          return new Response(JSON.stringify({
+            totalAnnouncement: 2,
+            totalRecordNum: 2,
+            announcements: [
+              {
+                secCode: "600685",
+                secName: "中船防务",
+                orgId: "gssh0600685",
+                announcementId: "h-share-report",
+                announcementTitle: "中船防务H股公告_2023年年度报告",
+                announcementTime: Date.parse("2024-04-26T00:00:00+08:00"),
+                adjunctUrl: "finalpage/2024-04-26/h-share-report.PDF",
+                adjunctType: "PDF",
+              },
+              {
+                secCode: "600685",
+                secName: "中船防务",
+                orgId: "gssh0600685",
+                announcementId: "a-share-report",
+                announcementTitle: "中船防务2023年年度报告",
+                announcementTime: Date.parse("2024-03-28T00:00:00+08:00"),
+                adjunctUrl: "finalpage/2024-03-28/a-share-report.PDF",
+                adjunctType: "PDF",
+              },
+            ],
+          }));
+        }
+        if (url.hostname === "static.cninfo.com.cn") {
+          downloadedPaths.push(url.pathname);
+          return new Response("%PDF-A-H-selection-fixture");
+        }
+        return new Response("not found", { status: 404 });
+      },
+    );
+    const provider = new CninfoProvider({
+      fetchImplementation,
+      extractTextImplementation: async () => [
+        [
+          "中船海洋与防务装备股份有限公司",
+          "合并利润表",
+          "2023 年度",
+          "（除特别注明外，金额单位均为人民币元）",
+          "项目 2023 年度 2022 年度",
+          "一、营业总收入 16,145,951,496.09 12,795,124,917.87",
+          "归属于母公司股东的净利润 48,067,553.44 688,459,748.15",
+          "合并现金流量表",
+        ].join("\n"),
+      ],
+      retries: 0,
+    });
+    const batch = parseProviderBatch(provider, await provider.fetch({
+      instrument: {
+        instrumentId: "XSHG:600685",
+        companyId: "company:XSHG:600685",
+        exchangeMic: "XSHG",
+        symbol: "600685",
+        shareClass: "A",
+        tradingCurrency: "CNY",
+      },
+      requirements: ["income.revenue", "income.netProfitParent"].map(
+        (conceptId) => ({
+          conceptId: conceptId as ProviderRequest["requirements"][number]["conceptId"],
+          required: true,
+          period: { fiscalYear: 2023, presentation: "annual" as const },
+        }),
+      ),
+      asOf: "2024-08-30T23:59:59+08:00",
+      offline: false,
+    }, {
+      signal: new AbortController().signal,
+      now: "2026-08-01T09:00:00+08:00",
+      snapshots,
+    }));
+
+    expect(downloadedPaths).toEqual([
+      "/finalpage/2024-03-28/a-share-report.PDF",
+    ]);
+    expect(batch.issues).toEqual([]);
+    expect(batch.observations.every((observation) =>
+      observation.provenance.documentId === "a-share-report"
+    )).toBe(true);
+  });
+
   it("persists OCR text and links OCR-derived facts to that snapshot", async () => {
     const fetchImplementation = vi.fn<FetchImplementation>(
       async (input) => {
@@ -615,6 +737,49 @@ describe("CninfoProvider", () => {
         step.transformId === "ocr-spatial-line-reconstruction"
       )
     )).toBe(true);
+  });
+
+  it("reports an unusable OCR text layer separately from a missing statement", async () => {
+    const fetchImplementation = vi.fn<FetchImplementation>(
+      async (input) => {
+        const url = new URL(String(input));
+        if (url.pathname.endsWith("/information/topSearch/query")) {
+          return new Response(await fixture("search-600519.json"));
+        }
+        if (url.pathname.endsWith("/hisAnnouncement/query")) {
+          return new Response(await fixture("annual-600519-2025.json"));
+        }
+        return new Response("%PDF-unusable-ocr-fixture");
+      },
+    );
+    const provider = new CninfoProvider({
+      fetchImplementation,
+      extractTextImplementation: async () => ({
+        pages: ["会 证 0 表\n本 期 致 上 年 同 朝 数\n7,757,496,967"],
+        ocr: {
+          engine: "tesseract.js",
+          version: "7.0.0",
+          language: "chi_sim",
+          pageNumbers: [1],
+        },
+      }),
+      retries: 0,
+    });
+    const batch = await provider.fetch(request, {
+      signal: new AbortController().signal,
+      now: "2026-08-01T09:00:00+08:00",
+      snapshots,
+    });
+
+    expect(batch.issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        code: "PARSE_FAILED",
+        reasonCode: "OCR_TEXT_UNUSABLE",
+        requirements: [expect.objectContaining({
+          conceptId: "income.revenue",
+        })],
+      }),
+    ]));
   });
 
   it("preserves a typed statement diagnostic when the main table is absent", async () => {

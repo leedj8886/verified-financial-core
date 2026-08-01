@@ -26,7 +26,7 @@ import { extractText, getDocumentProxy } from "unpdf";
 
 const PROVIDER_ID = "cninfo-direct";
 const UPSTREAM_SOURCE_ID = "cninfo";
-const MAPPING_VERSION = "cninfo@1.8.0";
+const MAPPING_VERSION = "cninfo@1.9.0";
 const API_BASE = "https://www.cninfo.com.cn/new/";
 const WEBAPI_BASE = "https://webapi.cninfo.com.cn/";
 const PDF_BASE = "https://static.cninfo.com.cn/";
@@ -137,6 +137,7 @@ export type FinancialExtractionFailure =
   | "STATEMENT_NOT_FOUND"
   | "STATEMENT_IMAGE_ONLY"
   | "TEXT_ENCODING_UNUSABLE"
+  | "OCR_TEXT_UNUSABLE"
   | "COLUMN_LAYOUT_AMBIGUOUS"
   | "LABEL_NOT_FOUND";
 
@@ -185,7 +186,7 @@ const fieldDefinitions: readonly FieldDefinition[] = [
     statement: "income",
     rawField: "合并利润表.归属于母公司股东的净利润",
     labels: [
-      /归属于母公司(?:股东|所有者)的净(?:利润|亏损)/,
+      /归属于母公司(?:股东|所有者(?:\s*(?:[（(]或股东[）)]|\/股东))?)的净(?:利润|亏损)/,
       /归属于上市公司股东的(?:净)?(?:利润|亏损)/,
     ],
     attribution: "parent",
@@ -1162,6 +1163,17 @@ function isFullReport(
       <= Date.parse(asOf);
 }
 
+function mainlandReportPreference(announcement: Announcement): number {
+  // CNINFO can return a later H-share/overseas filing beside the primary
+  // A-share report. Prefer the mainland filing while retaining the overseas
+  // document as a fail-closed fallback when it is the only available report.
+  return /H股公告|海外监管公告|境外监管公告/.test(
+      announcement.announcementTitle,
+    )
+    ? 0
+    : 1;
+}
+
 async function defaultExtractText(
   data: Uint8Array<ArrayBuffer>,
 ): Promise<string[]> {
@@ -1412,7 +1424,8 @@ export class CninfoProvider implements SourceProvider {
     const announcement = parseAnnouncements(parsed)
       .filter((candidate) => isFullReport(candidate, query, request.asOf))
       .sort((left, right) =>
-        right.announcementTime - left.announcementTime
+        mainlandReportPreference(right) - mainlandReportPreference(left)
+        || right.announcementTime - left.announcementTime
         || right.announcementId.localeCompare(left.announcementId)
       )[0];
     return {
@@ -1870,9 +1883,14 @@ export class CninfoProvider implements SourceProvider {
           const value = values[requirement.conceptId];
           if (value === undefined) {
             if (column === "comparative") return;
-            const detailReasonCode = extraction.failures[
+            const extractionReasonCode = extraction.failures[
               requirement.conceptId
             ] ?? "LABEL_NOT_FOUND";
+            const detailReasonCode: FinancialExtractionFailure =
+              filing.ocr !== undefined
+                && extractionReasonCode !== "STATEMENT_IMAGE_ONLY"
+                ? "OCR_TEXT_UNUSABLE"
+                : extractionReasonCode;
             unmapped.push(UnmappedObservationSchema.parse({
               unmappedId: stableId("unmapped", {
                 documentId: announcement.announcementId,

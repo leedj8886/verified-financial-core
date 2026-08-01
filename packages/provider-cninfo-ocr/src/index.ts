@@ -70,6 +70,26 @@ function normalizeForDetection(value: string): string {
   return value.normalize("NFKC").replace(/\s+/g, "");
 }
 
+function hasOnlyLowInformationText(value: string): boolean {
+  const compact = normalizeForDetection(value);
+  if (compact.length === 0) return true;
+  if (
+    /财务报表附注|审[计阅]报告|备查文件目录|第[八九十\d]+节财务报告/.test(
+      compact,
+    )
+    || /^(?:contents?|目录)$/i.test(compact)
+    || /^\D{0,40}\d{4}年(?:年)?度?报告(?:全文)?$/.test(compact)
+    || compact.length > 96
+  ) {
+    return false;
+  }
+  const punctuationCount = compact.match(/[，。；：]/g)?.length ?? 0;
+  const statementRows = compact.match(
+    /营业(?:总)?收入|归属于母公司|资产总计|经营活动产生的现金流量净额/g,
+  )?.length ?? 0;
+  return punctuationCount <= 1 && statementRows === 0;
+}
+
 export function findOcrCandidatePages(
   pages: readonly string[],
   options: Pick<
@@ -83,24 +103,44 @@ export function findOcrCandidatePages(
   const runs: Array<{ start: number; end: number; score: number }> = [];
   let start = -1;
   for (let index = 0; index <= pages.length; index += 1) {
-    const blank = index < pages.length && pages[index]!.trim().length === 0;
-    if (blank && start < 0) start = index;
-    if (blank || start < 0) continue;
+    const lowInformation = index < pages.length
+      && hasOnlyLowInformationText(pages[index]!);
+    if (lowInformation && start < 0) start = index;
+    if (lowInformation || start < 0) continue;
     const length = index - start;
     if (length >= minimum && length <= maximum) {
-      const nearbyBefore = pages
-        .slice(Math.max(0, start - 3), start)
-        .some((page) => /备查文件目录/.test(normalizeForDetection(page)));
+      const allBlank = pages.slice(start, index)
+        .every((page) => page.trim().length === 0);
+      const beforeContext = normalizeForDetection(
+        pages.slice(Math.max(0, start - 4), start).join("\n"),
+      );
+      const nearbyBefore = /备查文件目录/.test(beforeContext);
+      const financialTableBefore = /(?:二、财务报表|财务报表目录)/.test(
+          beforeContext,
+        )
+        || /财务报表.{0,800}合并(?:及(?:母)?公司)?利润表/.test(
+          beforeContext,
+        );
       const nearbyAfter = pages
         .slice(index, Math.min(pages.length, index + 3))
         .some((page) =>
           /(?:年度)?财务报表附注/.test(normalizeForDetection(page))
         );
-      runs.push({
-        start,
-        end: index,
-        score: length + (nearbyBefore ? 100 : 0) + (nearbyAfter ? 200 : 0),
-      });
+      if (
+        allBlank
+        || nearbyBefore
+        || financialTableBefore
+        || nearbyAfter
+      ) {
+        runs.push({
+          start,
+          end: index,
+          score: length
+            + (nearbyBefore ? 100 : 0)
+            + (financialTableBefore ? 200 : 0)
+            + (nearbyAfter ? 300 : 0),
+        });
+      }
     }
     start = -1;
   }
