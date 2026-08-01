@@ -90,6 +90,26 @@ function hasOnlyLowInformationText(value: string): boolean {
   return punctuationCount <= 1 && statementRows === 0;
 }
 
+function hasReadableConsolidatedIncomeStatement(
+  pages: readonly string[],
+): boolean {
+  return pages.some((page, pageIndex) => {
+    const normalized = page.normalize("NFKC");
+    if (
+      !/(?:^|\n)\s*合并(?:及(?:母)?公司)?利润表\s*(?:\n|$)/m.test(
+        normalized,
+      )
+    ) {
+      return false;
+    }
+    const context = normalizeForDetection(
+      pages.slice(pageIndex, pageIndex + 3).join("\n"),
+    );
+    return /营业(?:总)?收入/.test(context)
+      && /归属于母公司(?:股东|所有者).{0,12}净(?:利润|亏损)/.test(context);
+  });
+}
+
 export function findOcrCandidatePages(
   pages: readonly string[],
   options: Pick<
@@ -97,6 +117,7 @@ export function findOcrCandidatePages(
     "minimumBlankRunPages" | "maximumOcrPages"
   > = {},
 ): number[] {
+  if (hasReadableConsolidatedIncomeStatement(pages)) return [];
   const minimum = options.minimumBlankRunPages
     ?? DEFAULT_MINIMUM_BLANK_RUN_PAGES;
   const maximum = options.maximumOcrPages ?? DEFAULT_MAXIMUM_OCR_PAGES;

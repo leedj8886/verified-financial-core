@@ -66,6 +66,26 @@ describe("CNINFO OCR adapter", () => {
     ])).toEqual([]);
   });
 
+  it("skips OCR when the text layer already contains the main income statement", () => {
+    expect(findOcrCandidatePages([
+      [
+        "合并利润表",
+        "2024 年 1-6 月",
+        "一、营业总收入 100 90",
+        "五、净利润 10 9",
+        "归属于母公司所有者的净利润 8 7",
+      ].join("\n"),
+      "二、财务报表\n（三）合并利润表 第 4 页",
+      "第 2 页 共 153 页",
+      "第 3 页 共 153 页",
+      "第 4 页 共 153 页",
+      "第 5 页 共 153 页",
+      "第 6 页 共 153 页",
+      "第 7 页 共 153 页",
+      "财务报表附注 2024 年 1-6 月",
+    ])).toEqual([]);
+  });
+
   it("reconstructs split label and amount columns by vertical position", () => {
     const text = reconstructOcrPage(blocks(
       line(800, 100, "合 并 利 润 表"),
