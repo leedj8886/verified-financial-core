@@ -169,6 +169,62 @@ describe("CNINFO OCR adapter", () => {
     });
   });
 
+  it("recovers China Eastern later-comparative columns behind a stamped heading", async () => {
+    const recognize = vi.fn(async (
+      _image: Uint8Array,
+      mode?: "layout" | "single-block" | "sparse-text",
+    ) => mode === "layout"
+      ? {
+          blocks: blocks(
+            line(800, 100, "司 并 公 司"),
+            line(
+              700,
+              140,
+              "截 至 2025 年 6 月 30 日 截 至 2024 年 6 月 30 日 截 至 2025 年 6 月 30 日 截 至 2024 年 6 月 30 日",
+            ),
+            line(200, 220, "一 、 菅 业 收 入 四 (44)、 十 四 (4)"),
+            line(900, 220, "66,822 64,199 45,305 42,119"),
+            line(200, 260, "- 归 属 于 母 公 司 股 东 的 净 亏 损"),
+            line(900, 260, "(1,431) (2,768)"),
+          ),
+        }
+      : { text: "（除特别注明外，金额单位为人民币百万元）" });
+    const extractor = createCninfoOcrTextExtractor({
+      pageNumbers: [1],
+      extractTextImplementation: async () => [""],
+      renderPageImplementation: async () => new Uint8Array([1]),
+      createRecognizerImplementation: async () => ({
+        engine: "fake-ocr",
+        version: "1.0.0",
+        language: "chi_sim",
+        recognize,
+        terminate: async () => undefined,
+      }),
+    });
+
+    const result = await extractor(new Uint8Array([1]));
+    if (Array.isArray(result)) throw new Error("Expected structured result");
+    expect(result.pages[0]).toContain("合并及公司利润表");
+    expect(extractFinancialColumns(result.pages, {
+      fiscalYear: 2025,
+      fiscalQuarter: 2,
+      presentation: "ytd",
+    })).toMatchObject({
+      current: {
+        "income.revenue": "66822",
+        "income.netProfitParent": "-1431",
+      },
+      comparative: {
+        "income.revenue": "64199",
+        "income.netProfitParent": "-2768",
+      },
+      comparativeEvidence: {
+        "income.revenue": { scale: "1000000" },
+        "income.netProfitParent": { scale: "1000000" },
+      },
+    });
+  });
+
   it("returns hybrid pages and auditable OCR metadata", async () => {
     const renderPage = vi.fn(async (data, pageNumber: number) => {
       expect([...data]).toEqual([1, 2, 3]);

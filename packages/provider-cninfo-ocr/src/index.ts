@@ -18,7 +18,7 @@ const DEFAULT_SCALE = 3;
 const DEFAULT_MINIMUM_BLANK_RUN_PAGES = 6;
 const DEFAULT_MAXIMUM_OCR_PAGES = 24;
 const DEFAULT_CACHE_IDENTITY = "tesseract.js@7.0.0:chi_sim";
-const OCR_CACHE_FORMAT = "verified-financial-cninfo-ocr-cache/v11";
+const OCR_CACHE_FORMAT = "verified-financial-cninfo-ocr-cache/v12";
 
 export interface OcrRecognition {
   text?: string;
@@ -290,6 +290,8 @@ export function normalizeOcrNumericSeparators(text: string): string {
 
 function repairOcrSemanticText(text: string): string {
   return text
+    .replace(/^\s*司\s*并\s*公\s*司\s*$/gm, "合并 公司")
+    .replace(/菅\s*业\s*收\s*入/g, "营业收入")
     .replace(
       /仕\s*芥(?=\s*及\s*母\s*公\s*司\s*利\s*润\s*表)/g,
       "合并",
@@ -322,7 +324,7 @@ function restoreOcrIncomeStatementStructure(text: string): string {
       || /合并.*公司.*公司/.test(compact.slice(0, 1200))
       || (
         /合并公司/.test(compact.slice(0, 1200))
-        && (compact.slice(0, 1200).match(/\d{4}年度/g)?.length ?? 0) >= 4
+        && (compact.slice(0, 1200).match(/\d{4}年(?:度)?/g)?.length ?? 0) >= 4
       );
     lines = [combinedColumns ? "合并及公司利润表" : "合并利润表", ...lines];
   }
@@ -330,7 +332,7 @@ function restoreOcrIncomeStatementStructure(text: string): string {
   const combinedColumns = /合并.*公司.*公司/.test(headerContext)
     || (
       /合并公司/.test(headerContext)
-      && (headerContext.match(/\d{4}年度/g)?.length ?? 0) >= 4
+      && (headerContext.match(/\d{4}年(?:度)?/g)?.length ?? 0) >= 4
     );
   if (hasParserReadyIncomeHeading && combinedColumns) {
     const headingIndex = lines.findIndex((line) =>
