@@ -27,7 +27,7 @@ import { extractText, getDocumentProxy } from "unpdf";
 
 const PROVIDER_ID = "cninfo-direct";
 const UPSTREAM_SOURCE_ID = "cninfo";
-const MAPPING_VERSION = "cninfo@1.11.0";
+const MAPPING_VERSION = "cninfo@1.14.0";
 const API_BASE = "https://www.cninfo.com.cn/new/";
 const WEBAPI_BASE = "https://webapi.cninfo.com.cn/";
 const PDF_BASE = "https://static.cninfo.com.cn/";
@@ -783,6 +783,7 @@ interface StatementCandidate {
   labelText: string;
   labelOffsets: number[];
   financialColumnCount: 2 | 4;
+  financialColumnOrder: "entity-major" | "period-major";
   pageOffsets: Array<{ offset: number; pageNumber: number }>;
 }
 
@@ -867,6 +868,11 @@ function statementCandidates(
       financialColumnCount: /合并及(?:母)?公司/.test(start[1] ?? "")
         ? 4
         : 2,
+      financialColumnOrder:
+        /本[期朝].{0,4}(?:金额|数|金[甄颜]).{0,80}上(?:年同)?[期朝].{0,5}(?:金额|数|[入金][甄颜额])/s
+            .test(text.slice(0, 1200))
+          ? "period-major"
+          : "entity-major",
       pageOffsets,
     });
   }
@@ -940,7 +946,20 @@ function statementScale(text: string): string {
 }
 
 function startsNewStatementRow(line: string): boolean {
-  return /^\s*(?:[一二三四五六七八九十]+[、.．]|\d+[.、．])/.test(line);
+  return /^\s*(?:[一二三四五六七八九十]+[、.．]|\d+[.、．])/.test(line)
+    || /^\s*(?:手续费及佣金净收入|利息净收入|投资收益|公允价值变动|汇兑损益|其他业务收入|资产处置损益|其他收益|税金及附加|业务及管理费|信用减值损失|其他资产减值损失)/.test(
+      line,
+    );
+}
+
+function repairBrokenFinancialNumberSpacing(line: string): string {
+  return line
+    .replace(/\s*,\s*/g, ",")
+    .replace(
+      /(\d{1,3}(?:,\d{3})*,\d{1,2})\s+(?=\d{1,2}(?:\.\d+)?(?:\s|$))/g,
+      "$1",
+    )
+    .replace(/(\.\d)\s+(\d)(?=\s|$)/g, "$1$2");
 }
 
 function numericLineAfterLabel(
@@ -951,7 +970,9 @@ function numericLineAfterLabel(
   for (let lineOffset = 0; lineOffset < 4; lineOffset += 1) {
     const lineEnd = text.indexOf("\n", cursor);
     const end = lineEnd === -1 ? text.length : lineEnd;
-    const line = text.slice(cursor, end).trim();
+    const line = repairBrokenFinancialNumberSpacing(
+      text.slice(cursor, end).trim(),
+    );
     if (lineOffset > 0 && startsNewStatementRow(line)) return undefined;
     const tokens = [...line.matchAll(DECIMAL_TOKEN)];
     if (tokens.length > 0) return { line, end, tokens };
@@ -966,6 +987,8 @@ function financialValueTokens(
   tokens: RegExpMatchArray[],
   financialColumnCount: 2 | 4,
   scale: string,
+  financialColumnOrder: StatementCandidate["financialColumnOrder"] =
+    "entity-major",
 ): RegExpMatchArray[] {
   if (financialColumnCount === 4) {
     const expanded = scale === "1"
@@ -986,11 +1009,14 @@ function financialValueTokens(
             },
           );
         });
+    if (financialColumnOrder === "period-major" && expanded.length === 3) {
+      return [expanded[0]!, expanded[2]!];
+    }
     if (expanded.length >= financialColumnCount) {
-      return expanded.slice(
-        -financialColumnCount,
-        -financialColumnCount + 2,
-      );
+      const financial = expanded.slice(-financialColumnCount);
+      return financialColumnOrder === "period-major"
+        ? [financial[0]!, financial[2]!]
+        : financial.slice(0, 2);
     }
     // Ownership-attribution rows can legitimately omit standalone-company
     // values even in a combined consolidated/company statement.
@@ -1025,54 +1051,58 @@ function extractRow(
 } {
   let matchedLabel = false;
   for (const label of field.labels) {
-    const match = label.exec(section.labelText);
-    if (match === null) continue;
-    matchedLabel = true;
-    const matchStart = section.labelOffsets[match.index];
-    const matchEnd = section.labelOffsets[
-      match.index + match[0].length - 1
-    ];
-    if (matchStart === undefined || matchEnd === undefined) continue;
-    const numericLine = numericLineAfterLabel(
-      section.text,
-      matchEnd + 1,
-    );
-    if (numericLine === undefined) continue;
-    // Some issuers render the statement note as `四 (41)` while others render
-    // it as a plain `39`. Keep that column out of the two financial columns
-    // without treating a trailing PDF page counter as an inline note.
-    const scale = statementScale(section.text);
-    const tokens = financialValueTokens(
-      numericLine.line,
-      numericLine.tokens,
-      section.financialColumnCount,
-      scale,
-    );
-    const current = tokens[0];
-    if (current === undefined) continue;
-    const rawSnippet = section.text.slice(matchStart, numericLine.end).trim();
-    const pageNumber = [...section.pageOffsets]
-      .reverse()
-      .find((item) => item.offset <= matchStart)?.pageNumber
-      ?? section.pageNumber;
-    return {
-      current: parseDecimalToken(current[0]),
-      currentEvidence: {
-        pageNumber,
-        rawSnippet,
+    const flags = label.flags.includes("g") ? label.flags : `${label.flags}g`;
+    for (const match of section.labelText.matchAll(
+      new RegExp(label.source, flags),
+    )) {
+      matchedLabel = true;
+      const matchStart = section.labelOffsets[match.index];
+      const matchEnd = section.labelOffsets[
+        match.index + match[0].length - 1
+      ];
+      if (matchStart === undefined || matchEnd === undefined) continue;
+      const numericLine = numericLineAfterLabel(
+        section.text,
+        matchEnd + 1,
+      );
+      if (numericLine === undefined) continue;
+      // Some issuers render the statement note as `四 (41)` while others render
+      // it as a plain `39`. Keep that column out of the two financial columns
+      // without treating a trailing PDF page counter as an inline note.
+      const scale = statementScale(section.text);
+      const tokens = financialValueTokens(
+        numericLine.line,
+        numericLine.tokens,
+        section.financialColumnCount,
         scale,
-      },
-      ...(tokens[1] === undefined
-        ? {}
-        : {
-            comparative: parseDecimalToken(tokens[1]![0]),
-            comparativeEvidence: {
-              pageNumber,
-              rawSnippet,
-              scale,
-            },
-          }),
-    };
+        section.financialColumnOrder,
+      );
+      const current = tokens[0];
+      if (current === undefined) continue;
+      const rawSnippet = section.text.slice(matchStart, numericLine.end).trim();
+      const pageNumber = [...section.pageOffsets]
+        .reverse()
+        .find((item) => item.offset <= matchStart)?.pageNumber
+        ?? section.pageNumber;
+      return {
+        current: parseDecimalToken(current[0]),
+        currentEvidence: {
+          pageNumber,
+          rawSnippet,
+          scale,
+        },
+        ...(tokens[1] === undefined
+          ? {}
+          : {
+              comparative: parseDecimalToken(tokens[1]![0]),
+              comparativeEvidence: {
+                pageNumber,
+                rawSnippet,
+                scale,
+              },
+            }),
+      };
+    }
   }
   return {
     detailReasonCode: matchedLabel
@@ -1110,6 +1140,14 @@ function selectStatement(
     field.statement === statement
   );
   return statementCandidates(pages, statement)
+    .filter((candidate) => !(
+      /(?:调整|变更)前\s*影响金额\s*(?:调整|变更)后/.test(
+        candidate.text.slice(0, 1200),
+      )
+      || /更正前\s*更正金额\s*更正后/.test(
+        candidate.text.slice(0, 1200),
+      )
+    ))
     .map((candidate) => {
       const coverage = fields.filter((field) =>
         extractRow(candidate, field).current !== undefined
@@ -1121,13 +1159,9 @@ function selectStatement(
           )
           ? 100
           : 0;
-      const correctionPenalty =
-        /更正前\s+更正金额\s+更正后/.test(candidate.text.slice(0, 800))
-          ? 200
-          : 0;
       return {
         candidate,
-        score: periodScore + coverage * 10 - correctionPenalty,
+        score: periodScore + coverage * 10,
       };
     })
     .sort((left, right) =>

@@ -246,6 +246,52 @@ describe("CninfoProvider", () => {
     });
   });
 
+  it("skips a group heading and reads the later total-revenue row", async () => {
+    const extraction = extractFinancialColumns([
+      await fixture("brokerage-total-revenue-heading.txt"),
+    ], {
+      fiscalYear: 2024,
+      fiscalQuarter: 2,
+      presentation: "ytd",
+    });
+    expect(extraction.current["income.revenue"]).toBe("1399849660");
+    expect(extraction.comparative["income.revenue"]).toBe("1891591730");
+  });
+
+  it("does not treat a historical adjustment table as the main statement", async () => {
+    const extraction = extractFinancialColumns([
+      await fixture("historical-adjustment-table-only.txt"),
+    ], {
+      fiscalYear: 2025,
+      presentation: "annual",
+    });
+    expect(extraction.current["income.revenue"]).toBeUndefined();
+    expect(extraction.failures["income.revenue"]).toBe("STATEMENT_NOT_FOUND");
+  });
+
+  it("repairs whitespace-split decimal columns without joining adjacent columns", async () => {
+    const extraction = extractFinancialColumns([
+      await fixture("split-decimal-columns.txt"),
+    ], {
+      fiscalYear: 2025,
+      fiscalQuarter: 2,
+      presentation: "ytd",
+    });
+    expect(extraction.current["income.revenue"]).toBe("921354746.21");
+    expect(extraction.comparative["income.revenue"]).toBe("1198670567.05");
+  });
+
+  it("preserves a well-formed later comparative value", async () => {
+    const extraction = extractFinancialColumns([
+      await fixture("well-formed-later-comparative.txt"),
+    ], {
+      fiscalYear: 2024,
+      presentation: "annual",
+    });
+    expect(extraction.current["income.revenue"]).toBe("7763152343.16");
+    expect(extraction.comparative["income.revenue"]).toBe("5371433101.13");
+  });
+
   it("supports airline statement labels, integer values, losses, and thousand-CNY scale", async () => {
     const extraction = extractFinancialColumns([
       await fixture("airline-statement-labels.txt"),
@@ -333,6 +379,26 @@ describe("CninfoProvider", () => {
       currentEvidence: {
         "income.revenue": { scale: "1000000" },
         "income.netProfitParent": { scale: "1000000" },
+      },
+    });
+  });
+
+  it("selects consolidated columns from period-major combined statements", async () => {
+    const extraction = extractFinancialColumns([
+      await fixture("combined-period-major-columns.txt"),
+    ], {
+      fiscalYear: 2024,
+      fiscalQuarter: 2,
+      presentation: "ytd",
+    });
+    expect(extraction).toMatchObject({
+      current: {
+        "income.revenue": "2855003783.80",
+        "income.netProfitParent": "786782176.62",
+      },
+      comparative: {
+        "income.revenue": "3831659317.39",
+        "income.netProfitParent": "1106074769.62",
       },
     });
   });

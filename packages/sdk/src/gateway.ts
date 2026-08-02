@@ -43,7 +43,7 @@ import {
   materializeRequestedFacts,
 } from "./derivation-orchestrator.js";
 
-const DEFAULT_VALIDATION_RULES_VERSION = "1.16.0";
+const DEFAULT_VALIDATION_RULES_VERSION = "1.20.0";
 const MARKET_DATE_FORMATTER = new Intl.DateTimeFormat("en-CA", {
   timeZone: "Asia/Shanghai",
   year: "numeric",

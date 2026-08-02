@@ -14,11 +14,11 @@ import {
   renderPageAsImage,
 } from "unpdf";
 
-const DEFAULT_SCALE = 3;
+const DEFAULT_SCALE = 4;
 const DEFAULT_MINIMUM_BLANK_RUN_PAGES = 6;
 const DEFAULT_MAXIMUM_OCR_PAGES = 24;
 const DEFAULT_CACHE_IDENTITY = "tesseract.js@7.0.0:chi_sim";
-const OCR_CACHE_FORMAT = "verified-financial-cninfo-ocr-cache/v12";
+const OCR_CACHE_FORMAT = "verified-financial-cninfo-ocr-cache/v13";
 
 export interface OcrRecognition {
   text?: string;
@@ -255,7 +255,8 @@ function collectPositionedLines(blocks: unknown): PositionedLine[] {
 }
 
 export function normalizeOcrNumericSeparators(text: string): string {
-  return text.replace(
+  return text.replace(/(?<=\d)\.\s+(?=\d{1,2}(?:\D|$))/g, ".")
+    .replace(
     /(\d{1,3}(?:,\d{3}){3})\s+(\d{2})(?=\s*[|‖]\s*\d{1,3}(?:,\d{3}){2,})/g,
     "$1.$2",
   )
@@ -291,14 +292,15 @@ export function normalizeOcrNumericSeparators(text: string): string {
 function repairOcrSemanticText(text: string): string {
   return text
     .replace(/^\s*司\s*并\s*公\s*司\s*$/gm, "合并 公司")
-    .replace(/菅\s*业\s*收\s*入/g, "营业收入")
+    .replace(/吾\s*并/g, "合并")
+    .replace(/[营菅]\s*业\s*(?:口\s*)?收\s*入/g, "营业收入")
     .replace(
       /仕\s*芥(?=\s*及\s*母\s*公\s*司\s*利\s*润\s*表)/g,
       "合并",
     )
     .replace(/利\s*涧\s*表/g, "利润表")
     .replace(
-      /归\s*[厨属]\s*于\s*(?:母\s*)?公\s*司\s*[阮股]\s*东\s*的\s*浑\s*利\s*[湘洵涧润涕]/g,
+      /归\s*[厨属]\s*于\s*(?:母\s*)?公\s*司\s*[阮股]\s*东\s*的\s*浑\s*利\s*[湘洵涧润涕涓]/g,
       "归属于母公司股东的净利润",
     )
     .replace(/浑\s*利\s*[洵涧润涕]/g, "净利润")

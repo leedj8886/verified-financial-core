@@ -127,10 +127,10 @@ describe("CNINFO OCR adapter", () => {
   it("normalizes OCR grouping punctuation without changing decimals", () => {
     expect(normalizeOcrNumericSeparators(
       "20,095.672,181.49 17.937.857.423 3,416,.652,099 0.34 "
-        + "6,896,205,555 83 | 6,371,577,00631",
+        + "6,896,205,555 83 | 6,371,577,00631 2,855,003,783. 80",
     )).toBe(
       "20,095,672,181.49 17,937,857,423 3,416,652,099 0.34 "
-        + "6,896,205,555.83 | 6,371,577,006.31",
+        + "6,896,205,555.83 | 6,371,577,006.31 2,855,003,783.80",
     );
   });
 
@@ -226,8 +226,9 @@ describe("CNINFO OCR adapter", () => {
   });
 
   it("returns hybrid pages and auditable OCR metadata", async () => {
-    const renderPage = vi.fn(async (data, pageNumber: number) => {
+    const renderPage = vi.fn(async (data, pageNumber: number, scale: number) => {
       expect([...data]).toEqual([1, 2, 3]);
+      expect(scale).toBe(4);
       return new Uint8Array([pageNumber]);
     });
     const terminate = vi.fn(async () => undefined);
@@ -284,7 +285,7 @@ describe("CNINFO OCR adapter", () => {
     if (Array.isArray(result)) throw new Error("Expected structured result");
     expect(result.pages[1]).toContain("金额单位为人民币百万元");
     expect(result.pages[1]).toContain(
-      "合并利润表\n金额单位为人民币百万元\n营 业 收 入 2 1,000 900",
+      "合并利润表\n金额单位为人民币百万元\n营业收入 2 1,000 900",
     );
     expect(renderPage).toHaveBeenCalledTimes(6);
     expect(recognize).toHaveBeenCalledTimes(12);
@@ -421,6 +422,34 @@ describe("CNINFO OCR adapter", () => {
       current: {
         "income.revenue": "2855003783.80",
         "income.netProfitParent": "786782176.62",
+      },
+    });
+  });
+
+  it("keeps consolidated comparisons when OCR drops the trailing company column", () => {
+    const text = reconstructOcrPage(blocks(
+      line(250, 100, "合 并 利 润 表"),
+      line(250, 140, "单 位 : 人 民 币 元"),
+      line(250, 180, "项 目 附 注 本 期 金 额 上 期 金 额"),
+      line(800, 220, "吾 并 | 母 公 司 吾 并 吾 并 母 公 司"),
+      line(250, 260, "一 、 营 业 口 收 入"),
+      line(900, 260, "2,855,003,783.80 2,480,994,198.30 3,831,659,317.39"),
+      line(250, 300, "归 属 于 母 公 司 股 东 的 浑 利 涓"),
+      line(900, 300, "786,782,176.62 1,106,074,769.62"),
+    ));
+
+    expect(extractFinancialColumns([text], {
+      fiscalYear: 2024,
+      fiscalQuarter: 2,
+      presentation: "ytd",
+    })).toMatchObject({
+      current: {
+        "income.revenue": "2855003783.80",
+        "income.netProfitParent": "786782176.62",
+      },
+      comparative: {
+        "income.revenue": "3831659317.39",
+        "income.netProfitParent": "1106074769.62",
       },
     });
   });
