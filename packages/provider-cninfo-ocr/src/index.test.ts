@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -9,6 +9,16 @@ import {
   normalizeOcrNumericSeparators,
   reconstructOcrPage,
 } from "./index.js";
+
+const cninfoFixtureRoot = new URL(
+  "../../../tests/fixtures/providers/cninfo/",
+  import.meta.url,
+);
+
+async function cninfoPageFixture(name: string): Promise<string[]> {
+  return (await readFile(new URL(name, cninfoFixtureRoot), "utf8"))
+    .split("\n\f\n");
+}
 
 function line(x0: number, y0: number, text: string) {
   return {
@@ -104,6 +114,15 @@ describe("CNINFO OCR adapter", () => {
     ])).toEqual([]);
   });
 
+  it.each([
+    "insurance-picc-2023-annual-corrupt-text-pages.txt",
+    "insurance-picc-2025-annual-corrupt-text-pages.txt",
+  ])("selects insurer statement pages whose text layer lost every amount: %s", async (name) => {
+    const pages = await cninfoPageFixture(name);
+
+    expect(findOcrCandidatePages(pages)).toEqual([1, 2]);
+  });
+
   it("reconstructs split label and amount columns by vertical position", () => {
     const text = reconstructOcrPage(blocks(
       line(800, 100, "合 并 利 润 表"),
@@ -122,6 +141,38 @@ describe("CNINFO OCR adapter", () => {
     expect(text).toContain(
       "归 属 于 母 公 司 所 有 者 的 净 利 润 751,302,210.52 -4,147,879,747.71",
     );
+  });
+
+  it("repairs insurer OCR glyph substitutions and merged million-CNY columns", () => {
+    const firstPage = reconstructOcrPage(blocks(
+      line(700, 100, "合 凶 利 凶 表"),
+      line(700, 130, "金 四 四 位 均 囚 人 民 四 百 万 元"),
+      line(200, 200, "一 、 四 四 四 收 入"),
+      line(900, 200, "553,097,529,633"),
+    ));
+    const secondPage = reconstructOcrPage(blocks(
+      line(700, 100, "合 凶 利 凶 表"),
+      line(200, 200, "1. 团 团 于 母 公 司 股 四 的 四 利 团"),
+      line(900, 200, "22,773 25,369"),
+    ));
+
+    expect(extractFinancialColumns([firstPage, secondPage], {
+      fiscalYear: 2023,
+      presentation: "annual",
+    })).toMatchObject({
+      current: {
+        "income.revenue": "553097",
+        "income.netProfitParent": "22773",
+      },
+      comparative: {
+        "income.revenue": "529633",
+        "income.netProfitParent": "25369",
+      },
+      currentEvidence: {
+        "income.revenue": { scale: "1000000" },
+        "income.netProfitParent": { scale: "1000000" },
+      },
+    });
   });
 
   it("normalizes OCR grouping punctuation without changing decimals", () => {

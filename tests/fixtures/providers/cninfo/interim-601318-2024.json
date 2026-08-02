@@ -1,0 +1,16 @@
+{
+  "totalAnnouncement": 1,
+  "totalRecordNum": 1,
+  "announcements": [
+    {
+      "secCode": "601318",
+      "secName": "中国平安",
+      "orgId": "gssh0601318",
+      "announcementId": "1220953914",
+      "announcementTitle": "中国平安2024年中期报告",
+      "announcementTime": 1724342400000,
+      "adjunctUrl": "finalpage/2024-08-23/1220953914.PDF",
+      "adjunctType": "PDF"
+    }
+  ]
+}

@@ -342,6 +342,115 @@ describe("CninfoProvider", () => {
     expect(extraction.failures["income.netProfitParent"]).toBeUndefined();
   });
 
+  it.each([
+    ["insurance-pingan-2023-annual-pages.txt", 2023, undefined, "annual", "913789", "85665", "880355", "111008"],
+    ["insurance-pingan-2024h1-pages.txt", 2024, 2, "ytd", "494966", "74619", "488783", "69841"],
+    ["insurance-pingan-2025-annual-pages.txt", 2025, undefined, "annual", "1050506", "134778", "1028925", "126607"],
+    ["insurance-pingan-2026q1-pages.txt", 2026, 1, "ytd", "218405", "25022", "232801", "27016"],
+    ["insurance-picc-2024h1-pages.txt", 2024, 2, "ytd", "292307", "22687", "280666", "19881"],
+    ["insurance-picc-2026q1-pages.txt", 2026, 1, "ytd", "148536", "8814", "156589", "12849"],
+    ["insurance-cpic-2023-annual-pages.txt", 2023, undefined, "annual", "323945", "27257", "332140", "24609"],
+    ["insurance-cpic-2024h1-pages.txt", 2024, 2, "ytd", "194634", "25132", "175539", "18332"],
+    ["insurance-cpic-2025-annual-pages.txt", 2025, undefined, "annual", "435156", "53505", "404089", "46604"],
+    ["insurance-cpic-2026q1-pages.txt", 2026, 1, "ytd", "92547", "10041", "93717", "9627"],
+  ] as const)(
+    "extracts insurer consolidated totals from %s",
+    async (
+      name,
+      fiscalYear,
+      fiscalQuarter,
+      presentation,
+      revenue,
+      profit,
+      comparativeRevenue,
+      comparativeProfit,
+    ) => {
+      const extraction = extractFinancialColumns(await pageFixture(name), {
+        fiscalYear,
+        ...(fiscalQuarter === undefined ? {} : { fiscalQuarter }),
+        presentation,
+      });
+
+      expect(extraction.current).toMatchObject({
+        "income.revenue": revenue,
+        "income.netProfitParent": profit,
+      });
+      expect(extraction.comparative).toMatchObject({
+        "income.revenue": comparativeRevenue,
+        "income.netProfitParent": comparativeProfit,
+      });
+      expect(extraction.currentEvidence["income.revenue"]).toMatchObject({
+        scale: "1000000",
+      });
+      expect(extraction.currentEvidence["income.netProfitParent"])
+        .toMatchObject({ scale: "1000000" });
+    },
+  );
+
+  it("accepts an A-share insurer interim report title", async () => {
+    const fetchImplementation = vi.fn<FetchImplementation>(
+      async (input) => {
+        const url = new URL(String(input));
+        if (url.pathname.endsWith("/information/topSearch/query")) {
+          return new Response(JSON.stringify([{
+            code: "601318",
+            orgId: "gssh0601318",
+            zwjc: "中国平安",
+          }]));
+        }
+        if (url.pathname.endsWith("/hisAnnouncement/query")) {
+          return new Response(await fixture("interim-601318-2024.json"));
+        }
+        if (url.hostname === "static.cninfo.com.cn") {
+          return new Response("%PDF-insurer-interim-fixture");
+        }
+        return new Response("not found", { status: 404 });
+      },
+    );
+    const provider = new CninfoProvider({
+      fetchImplementation,
+      extractTextImplementation: async () =>
+        await pageFixture("insurance-pingan-2024h1-pages.txt"),
+      retries: 0,
+    });
+    const concepts = ["income.revenue", "income.netProfitParent"] as const;
+    const batch = parseProviderBatch(provider, await provider.fetch({
+      instrument: {
+        instrumentId: "XSHG:601318",
+        companyId: "company:XSHG:601318",
+        exchangeMic: "XSHG",
+        symbol: "601318",
+        shareClass: "A",
+        tradingCurrency: "CNY",
+      },
+      requirements: concepts.map((conceptId) => ({
+        conceptId,
+        required: true,
+        period: {
+          fiscalYear: 2024,
+          fiscalQuarter: 2 as const,
+          presentation: "ytd" as const,
+        },
+      })),
+      asOf: "2026-08-02T23:59:59+08:00",
+      knowledgeAsOf: "2026-08-02T23:59:59+08:00",
+      offline: false,
+    }, {
+      signal: new AbortController().signal,
+      now: "2026-08-02T10:00:00+08:00",
+      snapshots,
+    }));
+
+    expect(batch.issues).toEqual([]);
+    expect(batch.observations).toEqual(expect.arrayContaining([
+      expect.objectContaining({ concept: "income.revenue", value: "494966" }),
+      expect.objectContaining({
+        concept: "income.netProfitParent",
+        value: "74619",
+      }),
+    ]));
+  });
+
   it("supports airline statement labels, integer values, losses, and thousand-CNY scale", async () => {
     const extraction = extractFinancialColumns([
       await fixture("airline-statement-labels.txt"),

@@ -18,7 +18,7 @@ const DEFAULT_SCALE = 4;
 const DEFAULT_MINIMUM_BLANK_RUN_PAGES = 6;
 const DEFAULT_MAXIMUM_OCR_PAGES = 24;
 const DEFAULT_CACHE_IDENTITY = "tesseract.js@7.0.0:chi_sim";
-const OCR_CACHE_FORMAT = "verified-financial-cninfo-ocr-cache/v13";
+const OCR_CACHE_FORMAT = "verified-financial-cninfo-ocr-cache/v14";
 
 export interface OcrRecognition {
   text?: string;
@@ -145,9 +145,39 @@ function hasReadableConsolidatedIncomeStatement(
     const context = normalizeForDetection(
       pages.slice(pageIndex, pageIndex + 3).join("\n"),
     );
-    return /营业(?:总)?收入/.test(context)
-      && /归属于母公司(?:股东|所有者).{0,12}净(?:利润|亏损)/.test(context);
+    return /(?:营业总收入|营业收入合计)[^\n一-鿿]{0,20}[(-]?\d/.test(
+      context,
+    )
+      && /归属于母公司(?:股东|所有者).{0,12}净(?:利润|亏损)[^\n一-鿿]{0,20}[(-]?\d/.test(
+        context,
+      );
   });
+}
+
+function corruptedIncomeStatementPages(
+  pages: readonly string[],
+  maximum: number,
+): number[] {
+  const candidates = pages.flatMap((page, pageIndex) => {
+    const compact = normalizeForDetection(page);
+    const hasStatementHeading = page.split(/\r?\n/).some((line) =>
+      /^合并(?:及(?:母)?公司)?利润表(?:续)?$/.test(
+        normalizeForDetection(line).replace(/[（()]/g, ""),
+      )
+    );
+    const hasRelevantRow = /营业(?:总)?收入|归属于母公司(?:股东|所有者).{0,12}净(?:利润|亏损)/
+      .test(compact);
+    const hasReadableAmount = /(?:营业总收入|营业收入合计)[^\n一-鿿]{0,20}[(-]?\d/.test(
+      compact,
+    )
+      || /归属于母公司(?:股东|所有者).{0,12}净(?:利润|亏损)[^\n一-鿿]{0,20}[(-]?\d/.test(
+        compact,
+      );
+    return hasStatementHeading && hasRelevantRow && !hasReadableAmount
+      ? [pageIndex + 1]
+      : [];
+  });
+  return candidates.length <= maximum ? candidates : [];
 }
 
 export function findOcrCandidatePages(
@@ -161,6 +191,8 @@ export function findOcrCandidatePages(
   const minimum = options.minimumBlankRunPages
     ?? DEFAULT_MINIMUM_BLANK_RUN_PAGES;
   const maximum = options.maximumOcrPages ?? DEFAULT_MAXIMUM_OCR_PAGES;
+  const corruptedStatements = corruptedIncomeStatementPages(pages, maximum);
+  if (corruptedStatements.length > 0) return corruptedStatements;
   const runs: Array<{ start: number; end: number; score: number }> = [];
   let start = -1;
   for (let index = 0; index <= pages.length; index += 1) {
@@ -293,7 +325,16 @@ function repairOcrSemanticText(text: string): string {
   return text
     .replace(/^\s*司\s*并\s*公\s*司\s*$/gm, "合并 公司")
     .replace(/吾\s*并/g, "合并")
+    .replace(/合\s*[凶并]\s*利\s*[凶K润]\s*表/g, "合并利润表")
+    .replace(
+      /金\s*[额四凶]\s*[单四凶]\s*位\s*均\s*[为囚四]\s*人\s*民\s*[币四凶]\s*百\s*万\s*元/g,
+      "金额单位为人民币百万元",
+    )
     .replace(/[营菅]\s*业\s*(?:口\s*)?收\s*入/g, "营业收入")
+    .replace(
+      /^(\s*一\s*、)\s*[^\d\n]{1,18}?收\s*入(?=\s*[(-]?\d)/gm,
+      "$1营业总收入",
+    )
     .replace(
       /仕\s*芥(?=\s*及\s*母\s*公\s*司\s*利\s*润\s*表)/g,
       "合并",
@@ -304,7 +345,11 @@ function repairOcrSemanticText(text: string): string {
       "归属于母公司股东的净利润",
     )
     .replace(/浑\s*利\s*[洵涧润涕]/g, "净利润")
-    .replace(/净\s*利\s*[洵涧济]/g, "净利润");
+    .replace(/净\s*利\s*[洵涧济]/g, "净利润")
+    .replace(
+      /^(\s*(?:1\s*[.、]\s*)?)[^\d\n]{0,12}母\s*公\s*司\s*股[^\d\n]{0,8}的[^\d\n]{0,8}利[^\d\n]{0,4}(?=\s*[(-]?\d)/gm,
+      "$1归属于母公司股东的净利润",
+    );
 }
 
 function restoreOcrIncomeStatementStructure(text: string): string {
@@ -382,7 +427,10 @@ function restoreOcrIncomeStatementStructure(text: string): string {
 
 function statementUnit(text: string): string | undefined {
   const compact = normalizeForDetection(text.slice(0, 1200));
-  if (/人民币(?:百万元|.{0,2}[刊白自]万元)/.test(compact)) return "百万元";
+  if (
+    /人民币(?:百万元|.{0,2}[刊白自]万元)/.test(compact)
+    || /人民[币四凶]百万元/.test(compact)
+  ) return "百万元";
   return /人民币(万元|千元|元)/.exec(compact)?.[1];
 }
 

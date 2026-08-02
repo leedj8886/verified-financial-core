@@ -27,7 +27,7 @@ import { extractText, getDocumentProxy } from "unpdf";
 
 const PROVIDER_ID = "cninfo-direct";
 const UPSTREAM_SOURCE_ID = "cninfo";
-const MAPPING_VERSION = "cninfo@1.15.0";
+const MAPPING_VERSION = "cninfo@1.16.0";
 const API_BASE = "https://www.cninfo.com.cn/new/";
 const WEBAPI_BASE = "https://webapi.cninfo.com.cn/";
 const PDF_BASE = "https://static.cninfo.com.cn/";
@@ -159,6 +159,7 @@ const fieldDefinitions: readonly FieldDefinition[] = [
     statement: "income",
     rawField: "合并利润表.营业总收入",
     labels: [
+      /营业收入合计/,
       /一、?营业总收入/,
       /营业总收入/,
       /一、?营业收入/,
@@ -299,6 +300,7 @@ const statementBoundaries: Record<
   income: {
     starts: [
       "合并利润表",
+      "中期合并利润表",
       "合并及公司利润表",
       "合并及母公司利润表",
     ],
@@ -796,12 +798,16 @@ function escapeRegExp(value: string): string {
 }
 
 function exactHeadingPattern(headings: readonly string[]): RegExp {
+  const spacedHeadings = headings.map((heading) =>
+    [...heading].map(escapeRegExp).join("[^\\S\\n]*")
+  );
   return new RegExp(
-    `^\\s*(?:[一二三四五六七八九十\\d]+[、.．]\\s*)?`
-    + `(?:截至[^\\n]{0,80}?期间\\s*)?`
-    + `(${headings.map(escapeRegExp).join("|")})`
-    + `(?:\\s*[（(][^\\n]*[）)])?\\s*$`,
-    "m",
+    `^[^\\S\\n]*(?:(?:[（(][一二三四五六七八九十\\d]+[）)]|[一二三四五六七八九十\\d]+[、.．])[^\\S\\n]*)?`
+    + `(?:截至[^\\n]{0,80}?期间[^\\S\\n]*)?`
+    + `(?:[^\\n]{0,80}?的[^\\S\\n]*|[^\\n]*\\p{Script=Han}[^\\n]*\\d+[^\\S\\n]*)?`
+    + `(${spacedHeadings.join("|")})`
+    + `(?:[^\\S\\n]*[（(][^\\n]*[）)])?[^\\S\\n]*$`,
+    "mu",
   );
 }
 
@@ -832,6 +838,19 @@ function statementCandidates(
     const page = pages[pageIndex]!.normalize("NFKC");
     const start = startPattern.exec(page);
     if (start === null) continue;
+    const compactPage = normalizePdfText(page);
+    const statementHeadingCount = compactPage.match(
+      /合并(?:及(?:母)?公司)?(?:资产负债表|利润表|现金流量表|股东权益变动表|所有者权益变动表)/g,
+    )?.length ?? 0;
+    const hasStatementValue = /(?:一、?营业收入|营业总收入|营业收入合计)[^\n]{0,80}\d/.test(
+      compactPage,
+    );
+    if (
+      statementHeadingCount >= 2
+      && !hasStatementValue
+    ) {
+      continue;
+    }
     // PDF text layers do not always preserve visual reading order. Some
     // issuers place the visually leading statement heading after every table
     // row in the extracted text. Rotate those pages so the heading remains the
@@ -949,7 +968,7 @@ function parseDecimalToken(raw: string): string {
 
 function statementScale(text: string): string {
   const unit =
-    /(?:金额)?单位(?:\s*[:：]\s*|\s*为\s*)(?:人民币)?\s*(百万元|万元|千元|元)/
+    /(?:金额)?单位(?:\s*[:：]\s*|\s*(?:均)?为\s*)(?:人民币)?\s*(百万元|万元|千元|元)/
       .exec(text.slice(0, 1200))?.[1];
   return {
     元: "1",
@@ -961,7 +980,7 @@ function statementScale(text: string): string {
 
 function startsNewStatementRow(line: string): boolean {
   return /^\s*(?:[一二三四五六七八九十]+[、.．]|\d+[.、．])/.test(line)
-    || /^\s*(?:手续费及佣金净收入|利息净收入|投资收益|公允价值变动|汇兑损益|其他业务收入|资产处置损益|其他收益|税金及附加|业务及管理费|信用减值损失|其他资产减值损失)/.test(
+    || /^\s*(?:保险服务收入|银行业务利息净收入|非保险业务手续费及佣金净收入|非银行业务利息收入|营业收入合计|手续费及佣金净收入|利息净收入|投资收益|公允价值变动|汇兑损益|其他业务收入|资产处置损益|其他收益|税金及附加|业务及管理费|信用减值损失|其他资产减值损失)/.test(
       line,
     );
 }
@@ -1004,25 +1023,23 @@ function financialValueTokens(
   financialColumnOrder: StatementCandidate["financialColumnOrder"] =
     "entity-major",
 ): RegExpMatchArray[] {
+  const expanded = scale === "1"
+    ? tokens
+    : tokens.flatMap((token) => {
+        const merged = token[0].match(/^\d{1,3}(?:,\d{3}){3,}$/);
+        const groups = merged === null ? undefined : merged[0].split(",");
+        if (groups === undefined || groups.length % 2 !== 0) return [token];
+        const middle = groups.length / 2;
+        return [groups.slice(0, middle), groups.slice(middle)].map(
+          (part) => {
+            const split = [part.join(",")] as unknown as RegExpMatchArray;
+            if (token.index !== undefined) split.index = token.index;
+            if (token.input !== undefined) split.input = token.input;
+            return split;
+          },
+        );
+      });
   if (financialColumnCount === 4) {
-    const expanded = scale === "1"
-      ? tokens
-      : tokens.flatMap((token) => {
-          const merged = token[0].match(/^\d{1,3}(?:,\d{3}){3,}$/);
-          const groups = merged === null
-            ? undefined
-            : merged[0].split(",");
-          if (groups === undefined || groups.length % 2 !== 0) return [token];
-          const middle = groups.length / 2;
-          return [groups.slice(0, middle), groups.slice(middle)].map(
-            (part) => {
-              const split = [part.join(",")] as unknown as RegExpMatchArray;
-              if (token.index !== undefined) split.index = token.index;
-              if (token.input !== undefined) split.input = token.input;
-              return split;
-            },
-          );
-        });
     if (financialColumnOrder === "period-major" && expanded.length === 3) {
       return [expanded[0]!, expanded[2]!];
     }
@@ -1036,18 +1053,18 @@ function financialValueTokens(
     // values even in a combined consolidated/company statement.
     return financialValueTokens(line, tokens, 2, scale);
   }
-  const first = tokens[0];
+  const first = expanded[0];
   if (first === undefined) return [];
   const prefix = line.slice(0, first.index ?? 0);
   const explicitNoteReference =
     /[一二三四五六七八九十]\s*$/.test(prefix)
     && /^\(\s*\d{1,3}\s*\)$/.test(first[0]);
-  const plainNoteReference = tokens.length === 3
+  const plainNoteReference = expanded.length === 3
     && /^\d{1,3}$/.test(first[0])
     && !/^\s*\//.test(
-      line.slice((tokens[2]!.index ?? 0) + tokens[2]![0].length),
+      line.slice((expanded[2]!.index ?? 0) + expanded[2]![0].length),
     );
-  return tokens.slice(
+  return expanded.slice(
     explicitNoteReference || plainNoteReference ? 1 : 0,
     explicitNoteReference || plainNoteReference ? 3 : 2,
   );
@@ -1285,7 +1302,15 @@ function isFullReport(
           `${query.fiscalYear}年年度报告`,
         )
       )
-    : announcement.announcementTitle.includes(query.reportLabel);
+    : (
+        announcement.announcementTitle.includes(query.reportLabel)
+        || (
+          query.fiscalQuarter === 2
+          && announcement.announcementTitle.includes(
+            `${query.fiscalYear}年中期报告`,
+          )
+        )
+      );
   return announcement.adjunctType.toUpperCase() === "PDF"
     && matchesReportLabel
     && !/摘要|英文|取消|更正公告|提示性公告/.test(
