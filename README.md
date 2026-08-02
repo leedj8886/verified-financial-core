@@ -48,11 +48,10 @@ cash-dividend announcements arbitrate Eastmoney's A/H dividend observations.
 Eastmoney also supplies A/H quotes and A-share statements; THS independently
 cross-checks A-share statements, Baidu independently cross-checks H-share
 statements, and Tencent/Baidu cover market and valuation fields. Official facts
-adjudicate compatible conflicts through the same verification core. When a
-PDF/OCR extraction is more than 5% away from two API sources that agree within
-1%, the core keeps all three observations, chooses the structured consensus as
-a usable warning, and emits `OFFICIAL_EXTRACTION_OUTLIER`; a single secondary
-source or an official API conflict still fails closed. HKEX
+adjudicate compatible conflicts through the same verification core. A material
+official-versus-aggregator conflict remains fail-closed even when two
+aggregators agree, because they can share the same stale reporting version.
+HKEX
 preserves the statement currency and reported scale and uses the exchange's
 exact release minute for historical `asOf` filtering. H-share statements
 remain `warning` when HKEX is the only independent source. Current-view THS

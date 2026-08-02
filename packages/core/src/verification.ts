@@ -71,31 +71,6 @@ function maximumDiscrepancyPercent(
   return maximum;
 }
 
-function structuredConsensusForExtractionOutlier(
-  observations: readonly Observation[],
-  official: Observation | undefined,
-): Observation[] | undefined {
-  if (
-    official === undefined
-    || !["pdf", "ocr"].includes(official.provenance.extractionMethod)
-  ) {
-    return undefined;
-  }
-  const structured = observations.filter((observation) =>
-    observation.observationId !== official.observationId
-    && observation.provenance.sourceType !== "official"
-    && observation.provenance.extractionMethod === "api"
-  );
-  if (structured.length < 2) return undefined;
-  if (maximumDiscrepancyPercent(structured).gt(1)) return undefined;
-  if (structured.some((observation) =>
-    discrepancyPercent(official, observation).lte(5)
-  )) {
-    return undefined;
-  }
-  return structured;
-}
-
 export function verifyObservations(
   observations: readonly Observation[],
 ): VerificationResult {
@@ -118,16 +93,12 @@ export function verifyObservations(
   const official = ordered.find(
     (observation) => observation.provenance.sourceType === "official",
   );
-  const structuredConsensus = structuredConsensusForExtractionOutlier(
-    ordered,
-    official,
-  );
   const maximum = maximumDiscrepancyPercent(ordered);
 
   let status: VerificationResult["status"] = "verified";
   let usable = true;
   let reasonCodes: string[] = [];
-  let chosenObservationId = official?.observationId ?? primary.observationId;
+  const chosenObservationId = official?.observationId ?? primary.observationId;
 
   if (incompatibleReasons.length > 0) {
     status = "failed";
@@ -136,10 +107,6 @@ export function verifyObservations(
   } else if (upstreams.length < 2) {
     status = "warning";
     reasonCodes = ["SINGLE_INDEPENDENT_SOURCE"];
-  } else if (structuredConsensus !== undefined) {
-    status = "warning";
-    reasonCodes = ["OFFICIAL_EXTRACTION_OUTLIER"];
-    chosenObservationId = structuredConsensus[0]!.observationId;
   } else if (maximum.gt(5) && official === undefined) {
     status = "failed";
     usable = false;
