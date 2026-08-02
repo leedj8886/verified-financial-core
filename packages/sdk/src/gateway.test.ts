@@ -1426,6 +1426,88 @@ describe("FinancialGateway", () => {
     expect(fixture.fetch).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps market facts at the effective date with a later knowledge cutoff", async () => {
+    const basis: AccountingBasis = {
+      standard: "OTHER",
+      scope: "standalone",
+      presentation: "reported",
+      attribution: "all-shareholders",
+      currency: "CNY",
+    };
+    const historicalPeriod: ReportingPeriod = {
+      kind: "instant",
+      endDate: "2024-08-30",
+      fiscalYear: 2024,
+      presentation: "annual",
+    };
+    const currentPeriod: ReportingPeriod = {
+      kind: "instant",
+      endDate: "2026-07-31",
+      fiscalYear: 2026,
+      presentation: "annual",
+    };
+    const fixture = makeDerivationProvider({
+      providerId: "dual-time-market",
+      capabilities: ["market"],
+      records: [
+        {
+          concept: "market.cap",
+          value: "999999",
+          unit: "CNY",
+          period: currentPeriod,
+          basis,
+          instrumentScoped: true,
+          publishedAt: "2026-07-31T15:30:00+08:00",
+        },
+        {
+          concept: "market.price.close",
+          value: "20",
+          unit: "CNY",
+          period: historicalPeriod,
+          basis,
+          instrumentScoped: true,
+          publishedAt: "2024-08-30T15:30:00+08:00",
+        },
+        {
+          concept: "market.shares.outstanding",
+          value: "1000",
+          unit: "shares",
+          period: historicalPeriod,
+          basis,
+          instrumentScoped: true,
+          publishedAt: "2025-03-31T18:00:00+08:00",
+        },
+      ],
+    });
+    const { gateway } = await makeGateway([fixture.provider]);
+
+    const factSet = await gateway.getFacts({
+      instrument: "600519.SH",
+      requirements: [{ conceptId: "market.cap", required: true }],
+      asOf: "2024-08-30T23:59:59+08:00",
+      knowledgeAsOf: "2026-08-02T23:59:59+08:00",
+    });
+
+    expect(factSet.facts).toEqual([
+      expect.objectContaining({
+        concept: "market.cap",
+        value: "20000",
+        period: historicalPeriod,
+        derivation: {
+          formulaId: "market-cap.price-times-shares.v1",
+          formulaVersion: "1.0.0",
+          inputFactIds: expect.any(Array),
+          expression: "price * shares",
+        },
+      }),
+    ]);
+    expect(factSet.temporalContext).toMatchObject({
+      effectiveAsOf: "2024-08-30T23:59:59+08:00",
+      knowledgeAsOf: "2026-08-02T23:59:59+08:00",
+      mode: "post-disclosure",
+    });
+  });
+
   it("fails closed when a TTM request has no explicit quarter", async () => {
     const fixture = makeDerivationProvider({
       providerId: "ttm-missing-quarter",

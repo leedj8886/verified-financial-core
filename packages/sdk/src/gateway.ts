@@ -42,7 +42,13 @@ import {
   materializeRequestedFacts,
 } from "./derivation-orchestrator.js";
 
-const DEFAULT_VALIDATION_RULES_VERSION = "1.10.0";
+const DEFAULT_VALIDATION_RULES_VERSION = "1.11.0";
+const MARKET_DATE_FORMATTER = new Intl.DateTimeFormat("en-CA", {
+  timeZone: "Asia/Shanghai",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+});
 const PROVIDER_MAPPING_REASON_CODES = new Set([
   "STATEMENT_NOT_FOUND",
   "STATEMENT_IMAGE_ONLY",
@@ -340,8 +346,24 @@ function matchesRequest(
   observation: Observation,
   request: FactRequest,
 ): boolean {
+  const effectiveMarketDate = MARKET_DATE_FORMATTER.format(
+    new Date(request.asOf),
+  );
   return request.requirements.some((requirement) => {
     if (requirement.conceptId !== observation.concept) return false;
+    if (
+      requirement.period === undefined
+      && (
+        requirement.conceptId.startsWith("market.")
+        || requirement.conceptId.startsWith("valuation.")
+      )
+      && (
+        observation.period.kind !== "instant"
+        || observation.period.endDate !== effectiveMarketDate
+      )
+    ) {
+      return false;
+    }
     if (requirement.period === undefined) return true;
     return observation.period.fiscalYear === requirement.period.fiscalYear
       && observation.period.fiscalQuarter
