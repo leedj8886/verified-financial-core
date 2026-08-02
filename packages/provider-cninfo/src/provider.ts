@@ -27,7 +27,7 @@ import { extractText, getDocumentProxy } from "unpdf";
 
 const PROVIDER_ID = "cninfo-direct";
 const UPSTREAM_SOURCE_ID = "cninfo";
-const MAPPING_VERSION = "cninfo@1.14.0";
+const MAPPING_VERSION = "cninfo@1.15.0";
 const API_BASE = "https://www.cninfo.com.cn/new/";
 const WEBAPI_BASE = "https://webapi.cninfo.com.cn/";
 const PDF_BASE = "https://static.cninfo.com.cn/";
@@ -304,6 +304,7 @@ const statementBoundaries: Record<
     ],
     ends: [
       "母公司利润表",
+      "利润表",
       "合并现金流量表",
       "合并及公司现金流量表",
       "合并及母公司现金流量表",
@@ -831,7 +832,15 @@ function statementCandidates(
     const page = pages[pageIndex]!.normalize("NFKC");
     const start = startPattern.exec(page);
     if (start === null) continue;
-    const sectionPages: string[] = [page.slice(start.index)];
+    // PDF text layers do not always preserve visual reading order. Some
+    // issuers place the visually leading statement heading after every table
+    // row in the extracted text. Rotate those pages so the heading remains the
+    // anchor without discarding the consolidated rows that precede it.
+    const sectionPages: string[] = [
+      start.index > page.length / 2
+        ? `${page.slice(start.index)}\n${page.slice(0, start.index)}`
+        : page.slice(start.index),
+    ];
     for (
       let nextPageIndex = pageIndex + 1;
       nextPageIndex < pages.length
@@ -841,7 +850,12 @@ function statementCandidates(
       const nextPage = pages[nextPageIndex]!.normalize("NFKC");
       const end = endPattern.exec(nextPage);
       if (end !== null) {
-        sectionPages.push(nextPage.slice(0, end.index));
+        // When a visually leading heading is serialized at the end of the
+        // page, all preceding rows belong to the new standalone statement,
+        // not to the consolidated candidate being assembled.
+        if (end.index <= nextPage.length / 2) {
+          sectionPages.push(nextPage.slice(0, end.index));
+        }
         break;
       }
       sectionPages.push(nextPage);

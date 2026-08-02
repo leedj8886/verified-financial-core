@@ -1481,6 +1481,127 @@ describe("FinancialGateway", () => {
     ]);
   });
 
+  it("reports the preferred TTM input as unusable when an older version remains usable", async () => {
+    const basis: AccountingBasis = {
+      standard: "CAS",
+      scope: "consolidated",
+      presentation: "reported",
+      currency: "CNY",
+    };
+    const annualPeriod: ReportingPeriod = {
+      kind: "duration",
+      startDate: "2023-01-01",
+      endDate: "2023-12-31",
+      fiscalYear: 2023,
+      presentation: "annual",
+    };
+    const currentYtdPeriod: ReportingPeriod = {
+      kind: "duration",
+      startDate: "2024-01-01",
+      endDate: "2024-06-30",
+      fiscalYear: 2024,
+      fiscalQuarter: 2,
+      presentation: "ytd",
+    };
+    const previousYtdPeriod: ReportingPeriod = {
+      kind: "duration",
+      startDate: "2023-01-01",
+      endDate: "2023-06-30",
+      fiscalYear: 2023,
+      fiscalQuarter: 2,
+      presentation: "ytd",
+    };
+    const originalVersion = (sourcePeriodEndDate: string): ReportingVersion => ({
+      kind: "original-filing",
+      sourcePeriodEndDate,
+    });
+    const laterVersion: ReportingVersion = {
+      kind: "later-comparative",
+      sourcePeriodEndDate: "2024-12-31",
+    };
+    const original = makeDerivationProvider({
+      providerId: "original-official",
+      capabilities: ["financials"],
+      sourceType: "official",
+      records: [
+        {
+          concept: "income.revenue",
+          value: "100",
+          unit: "CNY",
+          period: annualPeriod,
+          basis,
+          reportingVersion: originalVersion("2023-12-31"),
+        },
+        {
+          concept: "income.revenue",
+          value: "60",
+          unit: "CNY",
+          period: currentYtdPeriod,
+          basis,
+          reportingVersion: originalVersion("2024-06-30"),
+        },
+        {
+          concept: "income.revenue",
+          value: "40",
+          unit: "CNY",
+          period: previousYtdPeriod,
+          basis,
+          reportingVersion: originalVersion("2023-06-30"),
+        },
+      ],
+    }).provider;
+    const laterOfficial = makeDerivationProvider({
+      providerId: "later-official",
+      capabilities: ["financials"],
+      sourceType: "official",
+      records: [{
+        concept: "income.revenue",
+        value: "90",
+        unit: "CNY",
+        period: annualPeriod,
+        basis,
+        reportingVersion: laterVersion,
+      }],
+    }).provider;
+    const laterAggregator = makeDerivationProvider({
+      providerId: "later-aggregator",
+      capabilities: ["financials"],
+      records: [{
+        concept: "income.revenue",
+        value: "70",
+        unit: "CNY",
+        period: annualPeriod,
+        basis,
+        reportingVersion: laterVersion,
+      }],
+    }).provider;
+    const { gateway } = await makeGateway([
+      original,
+      laterOfficial,
+      laterAggregator,
+    ]);
+
+    const factSet = await gateway.getFacts({
+      instrument: "600519.SH",
+      requirements: [{
+        conceptId: "income.revenue",
+        required: true,
+        period: {
+          fiscalYear: 2024,
+          fiscalQuarter: 2,
+          presentation: "ttm",
+        },
+      }],
+      asOf: "2024-08-30T23:59:59+08:00",
+      knowledgeAsOf: "2026-08-02T23:59:59+08:00",
+    });
+
+    expect(factSet.facts).toEqual([]);
+    expect(factSet.reasonCodes).toContain(
+      "DERIVATION_INPUT_UNUSABLE:income.revenue:2023-12-31:annual",
+    );
+  });
+
   it("uses a later knowledge cutoff without moving the effective as-of", async () => {
     const provider = makeProvider({
       providerId: "post-disclosure",

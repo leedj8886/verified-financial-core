@@ -375,8 +375,9 @@ function missingDerivationInputReasons(
     const direct = facts.filter((fact) =>
       matchesRequirement(fact, dependency)
     );
-    if (direct.some((fact) => fact.usable)) return [];
-    const state = direct.length === 0 ? "MISSING" : "UNUSABLE";
+    const preferred = preferredVersionFacts(direct);
+    if (preferred.some((fact) => fact.usable)) return [];
+    const state = preferred.length === 0 ? "MISSING" : "UNUSABLE";
     return [
       `DERIVATION_INPUT_${state}:${dependency.conceptId}:`
       + `${selectorEndDate(period)}:${period.presentation}`,

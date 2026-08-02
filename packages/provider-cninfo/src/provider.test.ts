@@ -22,6 +22,10 @@ async function fixture(name: string): Promise<string> {
   return await readFile(new URL(name, fixtureRoot), "utf8");
 }
 
+async function pageFixture(name: string): Promise<string[]> {
+  return (await fixture(name)).split("\n\f\n");
+}
+
 const snapshots: SnapshotWriter = {
   async put(input) {
     const body = typeof input.body === "string"
@@ -281,15 +285,61 @@ describe("CninfoProvider", () => {
     expect(extraction.comparative["income.revenue"]).toBe("1198670567.05");
   });
 
-  it("preserves a well-formed later comparative value", async () => {
+  it("preserves a well-formed consolidated later comparative value", async () => {
     const extraction = extractFinancialColumns([
       await fixture("well-formed-later-comparative.txt"),
     ], {
       fiscalYear: 2024,
       presentation: "annual",
     });
-    expect(extraction.current["income.revenue"]).toBe("7763152343.16");
-    expect(extraction.comparative["income.revenue"]).toBe("5371433101.13");
+    expect(extraction.current["income.revenue"]).toBe("7718404055.79");
+    expect(extraction.comparative["income.revenue"]).toBe("7118747537.93");
+  });
+
+  it("keeps Fangzheng Securities 2023 consolidated rows when PDF headings sort after page content", async () => {
+    const extraction = extractFinancialColumns(
+      await pageFixture("fangzheng-securities-2023-annual-pages.txt"),
+      {
+        fiscalYear: 2023,
+        presentation: "annual",
+      },
+    );
+
+    expect(extraction.current).toMatchObject({
+      "income.revenue": "7118747537.93",
+      "income.netProfitParent": "2152451934.07",
+    });
+    expect(extraction.comparative).toMatchObject({
+      "income.revenue": "7776967803.03",
+      "income.netProfitParent": "2148043358.68",
+    });
+    expect(extraction.currentEvidence["income.revenue"]).toMatchObject({
+      pageNumber: 1,
+    });
+    expect(extraction.failures["income.netProfitParent"]).toBeUndefined();
+  });
+
+  it("keeps Fangzheng Securities 2025 consolidated rows out of the following standalone income statement", async () => {
+    const extraction = extractFinancialColumns(
+      await pageFixture("fangzheng-securities-2025-annual-pages.txt"),
+      {
+        fiscalYear: 2025,
+        presentation: "annual",
+      },
+    );
+
+    expect(extraction.current).toMatchObject({
+      "income.revenue": "10503548205.50",
+      "income.netProfitParent": "3970059037.13",
+    });
+    expect(extraction.comparative).toMatchObject({
+      "income.revenue": "7718404055.79",
+      "income.netProfitParent": "2207393645.91",
+    });
+    expect(extraction.currentEvidence["income.revenue"]).toMatchObject({
+      pageNumber: 1,
+    });
+    expect(extraction.failures["income.netProfitParent"]).toBeUndefined();
   });
 
   it("supports airline statement labels, integer values, losses, and thousand-CNY scale", async () => {
