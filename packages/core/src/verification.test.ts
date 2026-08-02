@@ -108,6 +108,87 @@ describe("cross-source verification", () => {
     });
   });
 
+  it("uses a two-source structured consensus when a PDF extraction is the outlier", () => {
+    const fact = verifyAndMaterializeFact([
+      makeObservation({
+        observationId: "cninfo-pdf",
+        value: "-4.636",
+        upstreamSourceId: "cninfo",
+        sourceType: "official",
+        extractionMethod: "pdf",
+      }),
+      makeObservation({
+        observationId: "eastmoney",
+        value: "72.9389",
+        upstreamSourceId: "eastmoney",
+      }),
+      makeObservation({
+        observationId: "ths",
+        value: "72.9389",
+        upstreamSourceId: "ths",
+      }),
+    ]);
+
+    expect(fact).toMatchObject({
+      value: "72.9389",
+      status: "warning",
+      usable: true,
+      reasonCodes: ["OFFICIAL_EXTRACTION_OUTLIER"],
+      verification: {
+        chosenObservationId: "eastmoney",
+        independentUpstreamSourceIds: ["cninfo", "eastmoney", "ths"],
+      },
+    });
+  });
+
+  it("does not override an official API conflict with aggregator consensus", () => {
+    expect(verifyObservations([
+      makeObservation({
+        observationId: "official-api",
+        value: "90",
+        upstreamSourceId: "official-api",
+        sourceType: "official",
+      }),
+      makeObservation({
+        observationId: "eastmoney",
+        value: "100",
+        upstreamSourceId: "eastmoney",
+      }),
+      makeObservation({
+        observationId: "ths",
+        value: "100",
+        upstreamSourceId: "ths",
+      }),
+    ])).toMatchObject({
+      status: "failed",
+      usable: false,
+      chosenObservationId: "official-api",
+      reasonCodes: ["OFFICIAL_OVERRIDE_SOURCE_CONFLICT"],
+    });
+  });
+
+  it("does not override a PDF extraction with only one structured source", () => {
+    expect(verifyObservations([
+      makeObservation({
+        observationId: "cninfo-pdf",
+        value: "90",
+        upstreamSourceId: "cninfo",
+        sourceType: "official",
+        extractionMethod: "pdf",
+      }),
+      makeObservation({
+        observationId: "eastmoney",
+        value: "100",
+        upstreamSourceId: "eastmoney",
+      }),
+    ])).toMatchObject({
+      status: "failed",
+      usable: false,
+      chosenObservationId: "cninfo-pdf",
+      reasonCodes: ["OFFICIAL_OVERRIDE_SOURCE_CONFLICT"],
+    });
+  });
+
   it("uses the latest revision published by each upstream source", () => {
     const fact = verifyAndMaterializeFact([
       makeObservation({

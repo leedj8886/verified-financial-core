@@ -107,6 +107,9 @@ importers:
       '@verified-financial/provider-tencent':
         specifier: workspace:*
         version: link:../provider-tencent
+      '@verified-financial/provider-ths':
+        specifier: workspace:*
+        version: link:../provider-ths
       '@verified-financial/sdk':
         specifier: workspace:*
         version: link:../sdk
@@ -287,6 +290,25 @@ importers:
         specifier: ^3.2.0
         version: 3.2.7(@types/node@22.20.1)
 
+  packages/provider-ths:
+    dependencies:
+      '@verified-financial/provider-contract':
+        specifier: workspace:*
+        version: link:../provider-contract
+      '@verified-financial/schema':
+        specifier: workspace:*
+        version: link:../schema
+    devDependencies:
+      tsup:
+        specifier: ^8.0.0
+        version: 8.5.1(typescript@5.9.3)
+      typescript:
+        specifier: ^5.9.0
+        version: 5.9.3
+      vitest:
+        specifier: ^3.2.0
+        version: 3.2.7(@types/node@22.20.1)
+
   packages/schema:
     dependencies:
       zod:
@@ -323,6 +345,9 @@ importers:
       '@verified-financial/storage':
         specifier: workspace:*
         version: link:../storage
+      decimal.js:
+        specifier: ^10.6.0
+        version: 10.6.0
       zod:
         specifier: ^4.0.0
         version: 4.4.3

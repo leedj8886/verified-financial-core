@@ -1576,6 +1576,10 @@ export class HkexProvider implements SourceProvider {
                 : { attribution: field.attribution }),
               currency: extraction.currency,
             },
+            reportingVersion: {
+              kind: "original-filing",
+              sourcePeriodEndDate: period.endDate,
+            },
             availability: {
               filingDate: releasedAt.slice(0, 10),
               publishedAt: releasedAt,

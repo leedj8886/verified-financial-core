@@ -32,6 +32,7 @@ import {
   type FactExplanation,
   type MetadataStore,
 } from "@verified-financial/storage";
+import { Decimal } from "decimal.js";
 import {
   SyntacticInstrumentResolver,
   type InstrumentResolution,
@@ -42,7 +43,7 @@ import {
   materializeRequestedFacts,
 } from "./derivation-orchestrator.js";
 
-const DEFAULT_VALIDATION_RULES_VERSION = "1.11.0";
+const DEFAULT_VALIDATION_RULES_VERSION = "1.15.0";
 const MARKET_DATE_FORMATTER = new Intl.DateTimeFormat("en-CA", {
   timeZone: "Asia/Shanghai",
   year: "numeric",
@@ -228,12 +229,23 @@ function capabilityForRequirement(
 
 function requirementsForProvider(
   provider: SourceProvider,
+  instrument: Instrument,
   requirements: readonly FactRequirement[],
 ): FactRequirement[] {
   const capabilities = new Set(provider.capabilities);
   return requirements.filter((requirement) =>
     capabilities.has(capabilityForRequirement(requirement))
+    && (provider.supportsRequirement?.(instrument, requirement) ?? true)
   );
+}
+
+function supportsRequirement(
+  provider: SourceProvider,
+  instrument: Instrument,
+  requirement: FactRequirement,
+): boolean {
+  return provider.capabilities.includes(capabilityForRequirement(requirement))
+    && (provider.supportsRequirement?.(instrument, requirement) ?? true);
 }
 
 function supportsInstrument(
@@ -372,11 +384,7 @@ function matchesRequest(
   });
 }
 
-function compatibilityGroupKey(observation: Observation): string {
-  const reportingVersion = observation.reportingVersion ?? {
-    kind: "original-filing" as const,
-    sourcePeriodEndDate: observation.period.endDate,
-  };
+function compatibilitySemanticKey(observation: Observation): string {
   return canonicalJson({
     companyId: observation.companyId,
     instrumentId: observation.instrumentId,
@@ -384,8 +392,92 @@ function compatibilityGroupKey(observation: Observation): string {
     unit: observation.unit,
     period: observation.period,
     basis: observation.basis,
-    reportingVersion,
   });
+}
+
+function compatibilityGroupKey(observation: Observation): string {
+  return canonicalJson({
+    semanticKey: compatibilitySemanticKey(observation),
+    reportingVersion: observation.reportingVersion ?? {
+      kind: "unversioned-current-view",
+    },
+  });
+}
+
+function observationDiscrepancyPercent(
+  left: Observation,
+  right: Observation,
+): Decimal {
+  const leftValue = new Decimal(left.value).mul(left.scale);
+  const rightValue = new Decimal(right.value).mul(right.scale);
+  const denominator = Decimal.min(leftValue.abs(), rightValue.abs());
+  if (denominator.isZero()) {
+    return leftValue.eq(rightValue) ? new Decimal(0) : new Decimal(Infinity);
+  }
+  return leftValue.minus(rightValue).abs().div(denominator).mul(100);
+}
+
+function reportingVersionRank(observation: Observation): number {
+  return {
+    "original-filing": 0,
+    "later-comparative": 1,
+    "explicit-restatement": 2,
+  }[observation.reportingVersion?.kind ?? "original-filing"];
+}
+
+function groupCompatibleObservations(
+  observations: readonly Observation[],
+): Map<string, Observation[]> {
+  const groups = new Map<string, Observation[]>();
+  const versionedBySemantic = new Map<string, Map<string, Observation[]>>();
+  for (const observation of observations) {
+    if (observation.reportingVersion === undefined) continue;
+    const semanticKey = compatibilitySemanticKey(observation);
+    const groupKey = compatibilityGroupKey(observation);
+    const semanticGroups = versionedBySemantic.get(semanticKey) ?? new Map();
+    const group = semanticGroups.get(groupKey) ?? [];
+    group.push(observation);
+    semanticGroups.set(groupKey, group);
+    versionedBySemantic.set(semanticKey, semanticGroups);
+    groups.set(groupKey, group);
+  }
+  for (const observation of observations) {
+    if (observation.reportingVersion !== undefined) continue;
+    const candidates = [...(
+      versionedBySemantic.get(compatibilitySemanticKey(observation))?.entries()
+        ?? []
+    )].map(([groupKey, group]) => {
+      const minimumDiscrepancy = Decimal.min(
+        ...group.map((candidate) =>
+          observationDiscrepancyPercent(observation, candidate)
+        ),
+      );
+      const representative = [...group].sort((left, right) =>
+        reportingVersionRank(right) - reportingVersionRank(left)
+        || (right.reportingVersion?.sourcePeriodEndDate ?? "")
+          .localeCompare(left.reportingVersion?.sourcePeriodEndDate ?? "")
+      )[0]!;
+      return { groupKey, minimumDiscrepancy, representative };
+    }).sort((left, right) =>
+      reportingVersionRank(right.representative)
+        - reportingVersionRank(left.representative)
+      || (right.representative.reportingVersion?.sourcePeriodEndDate ?? "")
+        .localeCompare(
+          left.representative.reportingVersion?.sourcePeriodEndDate ?? "",
+        )
+      || left.minimumDiscrepancy.comparedTo(right.minimumDiscrepancy)
+      || left.groupKey.localeCompare(right.groupKey)
+    );
+    const matchedCandidates = candidates.filter((candidate) =>
+      candidate.minimumDiscrepancy.lte(1)
+    );
+    const groupKey = (matchedCandidates[0] ?? candidates[0])?.groupKey
+      ?? compatibilityGroupKey(observation);
+    const group = groups.get(groupKey) ?? [];
+    group.push(observation);
+    groups.set(groupKey, group);
+  }
+  return groups;
 }
 
 function mergeInstruments(
@@ -615,13 +707,7 @@ export class FinancialGateway {
         !isAvailableAsOf(observation.availability, knowledgeAsOf)
       )
       .map(unavailableReason);
-    const groups = new Map<string, Observation[]>();
-    for (const observation of eligibleObservations) {
-      const key = compatibilityGroupKey(observation);
-      const group = groups.get(key) ?? [];
-      group.push(observation);
-      groups.set(key, group);
-    }
+    const groups = groupCompatibleObservations(eligibleObservations);
     const baseFacts = [...groups.entries()]
       .sort(([left], [right]) => left.localeCompare(right))
       .map(([, observations]) => verifyAndMaterializeFact(observations));
@@ -815,6 +901,7 @@ export class FinancialGateway {
     const providerPlans = eligibleProviders.flatMap((provider) => {
       const requirements = requirementsForProvider(
         provider,
+        resolution.instrument,
         fetchRequirements,
       );
       return requirements.length === 0 ? [] : [{ provider, requirements }];
@@ -822,9 +909,7 @@ export class FinancialGateway {
     const unsupportedReasons = request.requirements
       .filter((requirement) =>
         !eligibleProviders.some((provider) =>
-          provider.capabilities.includes(
-            capabilityForRequirement(requirement),
-          )
+          supportsRequirement(provider, resolution.instrument, requirement)
         )
       )
       .map((requirement) =>

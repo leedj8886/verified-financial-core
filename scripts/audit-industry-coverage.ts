@@ -132,6 +132,16 @@ function independentlyCorroborated(
   );
 }
 
+function upstreamsForFact(
+  factSet: VerifiedFactSet,
+  concept: string,
+): string[] {
+  return [...(
+    factSet.facts.find((fact) => fact.concept === concept && fact.usable)
+      ?.verification.independentUpstreamSourceIds ?? []
+  )].sort();
+}
+
 function satisfiesRequiredFacts(
   factSet: VerifiedFactSet,
   factRequest: FactRequest,
@@ -478,6 +488,32 @@ try {
             "market.cap",
           ),
         };
+        const upstreams = {
+          baseline_revenue: upstreamsForFact(
+            baselineFinancial,
+            "income.revenue",
+          ),
+          latest_revenue: upstreamsForFact(
+            latestFinancial,
+            "income.revenue",
+          ),
+          baseline_profit: upstreamsForFact(
+            baselineFinancial,
+            "income.netProfitParent",
+          ),
+          latest_profit: upstreamsForFact(
+            latestFinancial,
+            "income.netProfitParent",
+          ),
+          baseline_market_cap: upstreamsForFact(
+            baselineMarket,
+            "market.cap",
+          ),
+          latest_market_cap: upstreamsForFact(
+            latestMarket,
+            "market.cap",
+          ),
+        };
         const baselineFinancialComplete = [
           values.baseline_revenue,
           values.baseline_profit,
@@ -509,6 +545,7 @@ try {
           primary: company,
           values,
           independentlyCovered,
+          upstreams,
           baselineFinancialComplete,
           latestFinancialComplete,
           financialComplete,
@@ -570,6 +607,32 @@ try {
     ).filter(({ independentAmountCoverageRatio }) =>
       independentAmountCoverageRatio < amountCoverageThreshold
     );
+    const upstreamCoverage = Object.keys(metricConcepts).map((key) => {
+      const metric = key as MetricKey;
+      const denominator = companyResults.reduce((total, company) =>
+        total + Math.abs(company.primary[metric] ?? 0), 0);
+      const upstreamIds = new Set(
+        companyResults.flatMap((company) => company.upstreams[metric]),
+      );
+      return {
+        metric,
+        sources: [...upstreamIds].sort().map((upstreamSourceId) => {
+          const covered = companyResults.filter((company) =>
+            company.upstreams[metric].includes(upstreamSourceId)
+          );
+          const amountNumerator = covered.reduce((total, company) =>
+            total + Math.abs(company.primary[metric] ?? 0), 0);
+          return {
+            upstreamSourceId,
+            coveredCompanies: covered.length,
+            amountNumerator,
+            amountCoverageRatio: denominator === 0
+              ? 0
+              : amountNumerator / denominator,
+          };
+        }),
+      };
+    });
     const unresolvedReasons = new Map<string, number>();
     const unresolvedReasonBuckets = new Map<string, number>();
     for (const company of companyResults) {
@@ -616,6 +679,7 @@ try {
         failedMetrics: failedBaselineMetrics.map(({ metric }) => metric),
       },
       metricCoverage,
+      upstreamCoverage,
       unresolvedReasons: [...unresolvedReasons.entries()]
         .map(([reason, companyCount]) => ({ reason, companyCount }))
         .sort((left, right) =>
@@ -638,6 +702,7 @@ try {
     freshnessMaxAgeSeconds,
     coreCommit: currentCommit(),
     coreDirty: repositoryDirty(),
+    providerIds: providers.map((provider) => provider.providerId).sort(),
     baselineFinancialAsOf,
     baselineMarketAsOf,
     baselineKnowledgeMode: baselineFinancialAsOf === baselineMarketAsOf

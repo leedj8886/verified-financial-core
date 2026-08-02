@@ -23,8 +23,8 @@ Implemented:
   deterministic FactSet assembly;
 - immutable SHA-256 raw snapshot storage and SQLite audit metadata;
 - runtime-validated Provider contract;
-- token-free CNINFO/HKEX official-filing, Eastmoney, Tencent, and Baidu
-  Providers;
+- token-free CNINFO/HKEX official-filing, Eastmoney, Tencent, Baidu, and
+  A-share THS financial Providers;
 - optional local CNINFO OCR adapter for image-only Chinese financial
   statements, with page-level evidence and persisted OCR text snapshots;
 - traceable, unadjusted Tencent/Eastmoney daily closes for historical `asOf`
@@ -40,19 +40,25 @@ Implemented:
 - offline-safe `ah-context` JSON CLI;
 - provider-neutral fixture and Golden tests.
 
-The local Gateway registers five token-free Providers by default. CNINFO
+The local Gateway registers seven token-free Providers by default. CNINFO
 resolves A-share issuers and HKEX resolves H-share issuers; both discover
 periodic filings, snapshot official evidence, and extract a constrained set of
 financial facts. CNINFO's official implementation ledger and HKEX's EF001
 cash-dividend announcements arbitrate Eastmoney's A/H dividend observations.
-Eastmoney also supplies A/H quotes and A-share statements; Tencent and Baidu
-independently cross-check market and valuation fields. Official facts
-adjudicate compatible conflicts through the same verification core. HKEX
+Eastmoney also supplies A/H quotes and A-share statements; THS independently
+cross-checks A-share statements, Baidu independently cross-checks H-share
+statements, and Tencent/Baidu cover market and valuation fields. Official facts
+adjudicate compatible conflicts through the same verification core. When a
+PDF/OCR extraction is more than 5% away from two API sources that agree within
+1%, the core keeps all three observations, chooses the structured consensus as
+a usable warning, and emits `OFFICIAL_EXTRACTION_OUTLIER`; a single secondary
+source or an official API conflict still fails closed. HKEX
 preserves the statement currency and reported scale and uses the exchange's
 exact release minute for historical `asOf` filtering. H-share statements
-remain `warning` when HKEX is the only independent source. Tushare remains
-optional and the default runtime and test suite require no token or interface
-ledger.
+remain `warning` when HKEX is the only independent source. Current-view THS
+and Baidu facts do not claim a historical filing date and cannot independently
+backfill strict point-in-time requests. Tushare remains optional and the
+default runtime and test suite require no token or interface ledger.
 
 ## Requirements
 
@@ -339,6 +345,16 @@ each TTM input and retains older versions in lineage. A failed newest version
 does not fall back to an older value. Any discrepancy above 5% between
 independent sources still fails closed, including when one source is official.
 
+The default Gateway also uses THS as an A-share structured financial
+cross-check and Baidu Stock Connect V2 as an H-share structured financial
+cross-check. These current-view endpoints do not expose a trustworthy filing
+date or revision sequence, so their observations are available only from the
+actual fetch time and do not assert a `reportingVersion`. The Gateway aligns a
+current-view value to a compatible known disclosure version; if no close match
+exists, it is checked against the newest known version and the normal
+discrepancy rules still fail closed. This prevents today's comparative value
+from leaking into a strict historical request.
+
 ## Packages
 
 - `@verified-financial/schema`
@@ -349,6 +365,7 @@ independent sources still fails closed, including when one source is official.
 - `@verified-financial/provider-eastmoney`
 - `@verified-financial/provider-tencent`
 - `@verified-financial/provider-baidu`
+- `@verified-financial/provider-ths`
 - `@verified-financial/storage`
 - `@verified-financial/sdk`
 - `@verified-financial/ah-gateway-cli`

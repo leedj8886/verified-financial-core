@@ -13,6 +13,7 @@ export default defineConfig({
     "@verified-financial/provider-eastmoney",
     "@verified-financial/provider-hkex",
     "@verified-financial/provider-tencent",
+    "@verified-financial/provider-ths",
     "@verified-financial/sdk",
     "@verified-financial/storage",
   ],

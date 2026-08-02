@@ -29,6 +29,7 @@ interface ObservationOverrides {
   providerId?: string;
   upstreamSourceId?: string;
   sourceType?: "official" | "first-party" | "aggregator";
+  extractionMethod?: "api" | "pdf" | "ocr" | "html" | "manual";
   reportingVersion?: ReportingVersion;
 }
 
@@ -85,7 +86,7 @@ export function makeObservation(
       sourceUrl: `https://example.invalid/${overrides.providerId ?? "eastmoney-direct"}`,
       rawSnapshotId: `sha256:${overrides.providerId ?? "eastmoney-direct"}`,
       rawField: "RAW_FIELD",
-      extractionMethod: "api",
+      extractionMethod: overrides.extractionMethod ?? "api",
       fetchedAt: "2026-07-26T10:00:00+08:00",
       transformations: [],
     },

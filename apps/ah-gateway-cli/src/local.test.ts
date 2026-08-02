@@ -2,13 +2,15 @@ import { describe, expect, it } from "vitest";
 import { createDefaultProviders } from "./local.js";
 
 describe("local Gateway providers", () => {
-  it("registers five token-free public and official sources by default", () => {
+  it("registers seven token-free public and official sources by default", () => {
     const providers = createDefaultProviders();
     expect(providers.map((provider) => provider.providerId))
       .toEqual([
         "eastmoney-direct",
+        "ths-financial-direct",
         "cninfo-direct",
         "hkex-direct",
+        "baidu-hk-financial-direct",
         "tencent-direct",
         "baidu-direct",
       ]);

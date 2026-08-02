@@ -33,6 +33,31 @@ const snapshots: SnapshotWriter = {
 };
 
 describe("EastmoneyProvider", () => {
+  it("does not advertise H-share financial requirements it cannot serve", () => {
+    const provider = new EastmoneyProvider();
+    const instrument = {
+      instrumentId: "XHKG:02097",
+      companyId: "company:XHKG:02097",
+      exchangeMic: "XHKG" as const,
+      symbol: "02097",
+      shareClass: "H" as const,
+      tradingCurrency: "HKD" as const,
+    };
+
+    expect(provider.supportsRequirement?.(instrument, {
+      conceptId: "income.revenue",
+      required: true,
+    })).toBe(false);
+    expect(provider.supportsRequirement?.(instrument, {
+      conceptId: "market.price.close",
+      required: true,
+    })).toBe(true);
+    expect(provider.supportsRequirement?.(instrument, {
+      conceptId: "distribution.dividendPerShare",
+      required: true,
+    })).toBe(true);
+  });
+
   it("preserves exact decimals and maps public quote and statements", async () => {
     const fetchImplementation = vi.fn<FetchImplementation>(
       async (input) => {

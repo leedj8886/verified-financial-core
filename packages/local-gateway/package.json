@@ -24,6 +24,7 @@
     "@verified-financial/provider-eastmoney": "workspace:*",
     "@verified-financial/provider-hkex": "workspace:*",
     "@verified-financial/provider-tencent": "workspace:*",
+    "@verified-financial/provider-ths": "workspace:*",
     "@verified-financial/sdk": "workspace:*",
     "@verified-financial/storage": "workspace:*"
   },

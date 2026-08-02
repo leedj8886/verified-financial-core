@@ -350,6 +350,31 @@ describe("FinancialGateway", () => {
     expect(factSet.summary.overallStatus).toBe("verified");
   });
 
+  it("routes only requirements supported for the provider and instrument pair", async () => {
+    const scopedFetch = vi.fn<SourceProvider["fetch"]>();
+    const scopedProvider: SourceProvider = {
+      providerId: "mixed-market-financial",
+      upstreamSourceId: "mixed-market-financial",
+      capabilities: ["market", "financials"],
+      supportsRequirement: (_instrument, requirement) =>
+        requirement.conceptId.startsWith("market."),
+      fetch: scopedFetch,
+    };
+    const { gateway } = await makeGateway([
+      makeProvider({ providerId: "official", value: "100" }),
+      makeProvider({ providerId: "aggregator", value: "100" }),
+      scopedProvider,
+    ]);
+
+    const factSet = await gateway.getFacts(request);
+
+    expect(scopedFetch).not.toHaveBeenCalled();
+    expect(factSet.reasonCodes).not.toContain(
+      "PROVIDER_FAILURE:mixed-market-financial:EMPTY_RESPONSE",
+    );
+    expect(factSet.summary.overallStatus).toBe("verified");
+  });
+
   it("prefers company metadata from a provider that supplied observations", async () => {
     const emptyProvider: SourceProvider = {
       providerId: "empty-financial",
@@ -1190,6 +1215,190 @@ describe("FinancialGateway", () => {
     expect(retrospective.reasonCodes).not.toContain(
       "OFFICIAL_OVERRIDE_SOURCE_CONFLICT",
     );
+  });
+
+  it("aligns an unversioned current-view source only to its matching disclosure version", async () => {
+    const basis: AccountingBasis = {
+      standard: "CAS",
+      scope: "consolidated",
+      presentation: "reported",
+      attribution: "parent",
+      currency: "CNY",
+    };
+    const period: ReportingPeriod = {
+      kind: "duration",
+      startDate: "2024-01-01",
+      endDate: "2024-06-30",
+      fiscalYear: 2024,
+      fiscalQuarter: 2,
+      presentation: "ytd",
+    };
+    const versioned = makeDerivationProvider({
+      providerId: "versioned-source",
+      capabilities: ["financials"],
+      sourceType: "official",
+      records: [
+        {
+          concept: "income.revenue",
+          value: "301.83",
+          unit: "CNY",
+          period,
+          basis,
+          publishedAt: "2024-08-29T18:00:00+08:00",
+          reportingVersion: {
+            kind: "original-filing",
+            sourcePeriodEndDate: "2024-06-30",
+          },
+        },
+        {
+          concept: "income.revenue",
+          value: "274.33",
+          unit: "CNY",
+          period,
+          basis,
+          publishedAt: "2025-08-29T18:00:00+08:00",
+          reportingVersion: {
+            kind: "later-comparative",
+            sourcePeriodEndDate: "2025-06-30",
+          },
+        },
+      ],
+    });
+    const currentView = makeDerivationProvider({
+      providerId: "current-view-source",
+      capabilities: ["financials"],
+      records: [{
+        concept: "income.revenue",
+        value: "274.34",
+        unit: "CNY",
+        period,
+        basis,
+        publishedAt: "2026-08-02T10:00:00+08:00",
+      }],
+    });
+    const { gateway } = await makeGateway([
+      versioned.provider,
+      currentView.provider,
+    ]);
+
+    const strict = await gateway.getFacts({
+      instrument: "600519.SH",
+      requirements: [{
+        conceptId: "income.revenue",
+        required: true,
+        period: {
+          fiscalYear: 2024,
+          fiscalQuarter: 2,
+          presentation: "ytd",
+        },
+      }],
+      asOf: "2024-09-02T23:59:59+08:00",
+    });
+    expect(strict.facts[0]).toMatchObject({
+      value: "301.83",
+      status: "warning",
+      reportingVersion: { kind: "original-filing" },
+    });
+
+    const retrospective = await gateway.getFacts({
+      instrument: "600519.SH",
+      requirements: [{
+        conceptId: "income.revenue",
+        required: true,
+        period: {
+          fiscalYear: 2024,
+          fiscalQuarter: 2,
+          presentation: "ytd",
+        },
+      }],
+      asOf: "2024-09-02T23:59:59+08:00",
+      knowledgeAsOf: "2026-08-02T23:59:59+08:00",
+    });
+    expect(retrospective.facts[0]).toMatchObject({
+      value: "274.33",
+      status: "verified",
+      reportingVersion: { kind: "later-comparative" },
+      verification: {
+        independentUpstreamSourceIds: [
+          "current-view-source",
+          "versioned-source",
+        ],
+      },
+    });
+    expect(retrospective.facts[0]?.verification.observationIds).toContain(
+      "obs:current-view-source:income.revenue:2024:2:ytd:0",
+    );
+  });
+
+  it("fails closed when an unversioned current view conflicts with the newest known version", async () => {
+    const basis: AccountingBasis = {
+      standard: "CAS",
+      scope: "consolidated",
+      presentation: "reported",
+      currency: "CNY",
+    };
+    const period: ReportingPeriod = {
+      kind: "duration",
+      startDate: "2024-01-01",
+      endDate: "2024-06-30",
+      fiscalYear: 2024,
+      fiscalQuarter: 2,
+      presentation: "ytd",
+    };
+    const official = makeDerivationProvider({
+      providerId: "official-versioned",
+      capabilities: ["financials"],
+      sourceType: "official",
+      records: [{
+        concept: "income.revenue",
+        value: "100",
+        unit: "CNY",
+        period,
+        basis,
+        reportingVersion: {
+          kind: "original-filing",
+          sourcePeriodEndDate: "2024-06-30",
+        },
+      }],
+    });
+    const currentView = makeDerivationProvider({
+      providerId: "conflicting-current-view",
+      capabilities: ["financials"],
+      records: [{
+        concept: "income.revenue",
+        value: "200",
+        unit: "CNY",
+        period,
+        basis,
+      }],
+    });
+    const { gateway } = await makeGateway([
+      official.provider,
+      currentView.provider,
+    ]);
+
+    const factSet = await gateway.getFacts({
+      instrument: "600519.SH",
+      requirements: [{
+        conceptId: "income.revenue",
+        required: true,
+        period: {
+          fiscalYear: 2024,
+          fiscalQuarter: 2,
+          presentation: "ytd",
+        },
+      }],
+      asOf: "2024-08-30T23:59:59+08:00",
+      knowledgeAsOf: "2026-08-02T23:59:59+08:00",
+    });
+
+    expect(factSet.facts[0]).toMatchObject({
+      value: "100",
+      status: "failed",
+      usable: false,
+      reasonCodes: ["OFFICIAL_OVERRIDE_SOURCE_CONFLICT"],
+      reportingVersion: { kind: "original-filing" },
+    });
   });
 
   it("does not fall back when the newest reporting version fails", async () => {

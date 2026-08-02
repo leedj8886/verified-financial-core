@@ -197,6 +197,10 @@ export interface SourceProvider {
   readonly upstreamSourceId: string;
   readonly capabilities: readonly ProviderCapability[];
   supportsInstrument?(instrument: Instrument): boolean;
+  supportsRequirement?(
+    instrument: Instrument,
+    requirement: FactRequirement,
+  ): boolean;
   fetch(
     request: ProviderRequest,
     context: ProviderContext,

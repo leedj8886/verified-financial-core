@@ -529,6 +529,17 @@ export class EastmoneyProvider implements SourceProvider {
     this.options = options;
   }
 
+  supportsRequirement(
+    instrument: ProviderRequest["instrument"],
+    requirement: FactRequirement,
+  ): boolean {
+    if (instrument.exchangeMic !== "XHKG") return true;
+    const concept = requirement.conceptId;
+    return concept.startsWith("market.")
+      || concept.startsWith("valuation.")
+      || concept.startsWith("distribution.");
+  }
+
   private async request(
     url: string,
     context: ProviderContext,

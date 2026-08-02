@@ -1,5 +1,8 @@
 import { join } from "node:path";
-import { BaiduProvider } from "@verified-financial/provider-baidu";
+import {
+  BaiduHkFinancialProvider,
+  BaiduProvider,
+} from "@verified-financial/provider-baidu";
 import {
   CninfoProvider,
   type CninfoProviderOptions,
@@ -8,6 +11,7 @@ import type { SourceProvider } from "@verified-financial/provider-contract";
 import { EastmoneyProvider } from "@verified-financial/provider-eastmoney";
 import { HkexProvider } from "@verified-financial/provider-hkex";
 import { TencentProvider } from "@verified-financial/provider-tencent";
+import { ThsFinancialProvider } from "@verified-financial/provider-ths";
 import { FinancialGateway } from "@verified-financial/sdk";
 import {
   ContentAddressedSnapshotStore,
@@ -32,8 +36,10 @@ export function createDefaultProviders(
 ): SourceProvider[] {
   return [
     new EastmoneyProvider(),
+    new ThsFinancialProvider(),
     new CninfoProvider(options.cninfo),
     new HkexProvider(),
+    new BaiduHkFinancialProvider(),
     new TencentProvider(),
     new BaiduProvider(),
   ];
